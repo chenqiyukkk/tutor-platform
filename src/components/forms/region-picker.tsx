@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useId, useState } from "react";
+import { useEffect, useId, useRef, useState } from "react";
 
 import type { RegionDto } from "@/features/regions/service";
 
@@ -38,6 +38,7 @@ export function RegionPicker({
   const [districtId, setDistrictId] = useState("");
   const [loadingLevel, setLoadingLevel] = useState<1 | 2 | 3 | null>(1);
   const [error, setError] = useState<string | null>(null);
+  const requestSequence = useRef<Record<2 | 3, number>>({ 2: 0, 3: 0 });
 
   useEffect(() => {
     let active = true;
@@ -57,33 +58,43 @@ export function RegionPicker({
   }, [fetchRegions]);
 
   async function loadChildren(level: 2 | 3, parentId: string) {
+    const sequence = ++requestSequence.current[level];
     setLoadingLevel(level);
     setError(null);
     try {
       const regions = await fetchRegions({ level, parentId });
+      if (requestSequence.current[level] !== sequence) return;
       if (level === 2) setCities(regions);
       else setDistricts(regions);
     } catch {
+      if (requestSequence.current[level] !== sequence) return;
       setError("区域加载失败，请稍后重试");
     } finally {
-      setLoadingLevel(null);
+      if (requestSequence.current[level] === sequence) setLoadingLevel(null);
     }
   }
 
   function changeProvince(nextProvinceId: string) {
+    requestSequence.current[2] += 1;
+    requestSequence.current[3] += 1;
     setProvinceId(nextProvinceId);
     setCityId("");
     setDistrictId("");
     setCities([]);
     setDistricts([]);
+    setLoadingLevel(null);
+    setError(null);
     onChange(null);
     if (nextProvinceId) void loadChildren(2, nextProvinceId);
   }
 
   function changeCity(nextCityId: string) {
+    requestSequence.current[3] += 1;
     setCityId(nextCityId);
     setDistrictId("");
     setDistricts([]);
+    setLoadingLevel(null);
+    setError(null);
     onChange(null);
     if (nextCityId) void loadChildren(3, nextCityId);
   }

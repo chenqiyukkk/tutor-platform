@@ -21,14 +21,23 @@ describe("GET /api/regions", () => {
     ]);
   });
 
-  it("returns 400 for illegal query parameters without querying", async () => {
+  it.each([
+    ["invalid value", "level=county"],
+    ["level 1 with parent", "level=1&parentId=aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa"],
+    ["level 2 without parent", "level=2"],
+    ["level 3 without parent", "level=3"],
+    ["parent without level", "parentId=aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa"],
+  ])("returns stable 400 for %s without querying", async (_label, query) => {
     const list = vi.fn();
     const handler = createRegionsGetHandler({ list } as RegionRepository);
 
-    const response = await handler(new Request("http://localhost/api/regions?level=county"));
+    const response = await handler(new Request(`http://localhost/api/regions?${query}`));
 
     expect(response.status).toBe(400);
-    await expect(response.json()).resolves.toEqual({ error: "区域查询参数无效" });
+    await expect(response.json()).resolves.toEqual({
+      code: "INVALID_REGION_QUERY",
+      error: "区域查询参数无效",
+    });
     expect(list).not.toHaveBeenCalled();
   });
 });

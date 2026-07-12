@@ -16,8 +16,10 @@ export interface RegionRepository {
 }
 
 export class RegionQueryError extends Error {
+  readonly code = "INVALID_REGION_QUERY";
+
   constructor() {
-    super("Invalid region query");
+    super("区域查询参数无效");
     this.name = "RegionQueryError";
   }
 }
@@ -38,12 +40,14 @@ function parseRegionQuery(searchParams: URLSearchParams): RegionQuery {
   if (rawLevel !== null && !/^[1-3]$/.test(rawLevel)) throw new RegionQueryError();
 
   if (rawParentId === null && rawLevel === null) return { level: 1, parentId: null };
-  const level = rawLevel === null ? undefined : Number(rawLevel) as 1 | 2 | 3;
-  return {
-    ...(rawParentId === null ? {} : { parentId: rawParentId }),
-    ...(level === undefined ? {} : { level }),
-    ...(level === 1 && rawParentId === null ? { parentId: null } : {}),
-  };
+  if (rawLevel === "1") {
+    if (rawParentId !== null) throw new RegionQueryError();
+    return { level: 1, parentId: null };
+  }
+  if ((rawLevel === "2" || rawLevel === "3") && rawParentId !== null) {
+    return { level: Number(rawLevel) as 2 | 3, parentId: rawParentId };
+  }
+  throw new RegionQueryError();
 }
 
 function toRegionDto(region: RegionDto): RegionDto {
@@ -73,7 +77,7 @@ export function createRegionsGetHandler(repository: RegionRepository) {
       return Response.json(regions);
     } catch (error) {
       if (error instanceof RegionQueryError) {
-        return Response.json({ error: "区域查询参数无效" }, { status: 400 });
+        return Response.json({ code: error.code, error: error.message }, { status: 400 });
       }
       throw error;
     }

@@ -40,7 +40,10 @@ describe("Prisma region repository", () => {
       { code: `A${marker}`, name: "先展示市", level: 2, parentId: province.id, sortOrder: 10 },
     ] });
 
-    const rows = await service.listRegions(new URLSearchParams({ parentId: province.id }));
+    const rows = await service.listRegions(new URLSearchParams({
+      level: "2",
+      parentId: province.id,
+    }));
 
     expect(rows.map((row) => row.name)).toEqual(["先展示市", "后创建市"]);
     expect(Object.keys(rows[0] ?? {}).sort()).toEqual(["code", "id", "level", "name", "parentId"]);
