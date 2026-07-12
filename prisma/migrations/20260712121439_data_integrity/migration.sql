@@ -8,9 +8,6 @@ ALTER TABLE "Conversation" DROP CONSTRAINT "Conversation_parentId_fkey";
 ALTER TABLE "Conversation" DROP CONSTRAINT "Conversation_teacherId_fkey";
 
 -- DropForeignKey
-ALTER TABLE "Favorite" DROP CONSTRAINT "Favorite_parentProfileId_fkey";
-
--- DropForeignKey
 ALTER TABLE "Greeting" DROP CONSTRAINT "Greeting_recipientAccountId_fkey";
 
 -- DropForeignKey
@@ -28,14 +25,43 @@ ALTER TABLE "Message" DROP CONSTRAINT "Message_senderAccountId_fkey";
 -- DropForeignKey
 ALTER TABLE "Report" DROP CONSTRAINT "Report_reporterAccountId_fkey";
 
+-- Add the new target columns as nullable so existing favorites can be backfilled safely.
+ALTER TABLE "Favorite"
+ADD COLUMN     "ownerAccountId" UUID,
+ADD COLUMN     "tutoringRequestId" UUID,
+ALTER COLUMN "teacherProfileId" DROP NOT NULL;
+
+-- Preserve legacy ownership through ParentProfile.accountId.
+UPDATE "Favorite" AS favorite
+SET "ownerAccountId" = parent_profile."accountId"
+FROM "ParentProfile" AS parent_profile
+WHERE favorite."parentProfileId" = parent_profile."id"
+  AND favorite."ownerAccountId" IS NULL;
+
+-- Abort instead of discarding a legacy favorite whose owner could not be resolved.
+DO $favorite_owner_backfill$
+BEGIN
+  IF EXISTS (
+    SELECT 1
+    FROM "Favorite" AS favorite
+    WHERE favorite."ownerAccountId" IS NULL
+  ) THEN
+    RAISE EXCEPTION 'Favorite ownerAccountId backfill failed for one or more legacy rows';
+  END IF;
+END
+$favorite_owner_backfill$;
+
+ALTER TABLE "Favorite"
+ALTER COLUMN "ownerAccountId" SET NOT NULL;
+
+-- DropForeignKey
+ALTER TABLE "Favorite" DROP CONSTRAINT "Favorite_parentProfileId_fkey";
+
 -- DropIndex
 DROP INDEX "Favorite_parentProfileId_teacherProfileId_key";
 
--- AlterTable
-ALTER TABLE "Favorite" DROP COLUMN "parentProfileId",
-ADD COLUMN     "ownerAccountId" UUID NOT NULL,
-ADD COLUMN     "tutoringRequestId" UUID,
-ALTER COLUMN "teacherProfileId" DROP NOT NULL;
+-- Remove the legacy owner relation only after the new owner is required.
+ALTER TABLE "Favorite" DROP COLUMN "parentProfileId";
 
 -- AlterTable
 ALTER TABLE "Message" ADD COLUMN     "readAt" TIMESTAMPTZ(3);
