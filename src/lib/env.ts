@@ -17,13 +17,32 @@ const consoleEmailEnvSchema = z.object({
   APP_URL: z.url("must be a valid URL").default("http://localhost:3000"),
 });
 
+const mailboxAddressSchema = z.string().email();
+
+function isSafeMailbox(value: string) {
+  if (/[\r\n,]/.test(value)) return false;
+  const namedMailbox = value.match(/^([^<>]+?)\s*<([^<>]+)>$/);
+  if (namedMailbox) {
+    return Boolean(namedMailbox[1].trim()) && mailboxAddressSchema.safeParse(
+      namedMailbox[2].trim(),
+    ).success;
+  }
+  return !/[<>]/.test(value) && mailboxAddressSchema.safeParse(value).success;
+}
+
 const smtpEmailEnvSchema = z.object({
-  APP_URL: z.url("must be a valid URL"),
+  APP_URL: z.url("must be a valid URL").refine(
+    (value) => new URL(value).protocol === "https:",
+    "must use HTTPS in production",
+  ),
   SMTP_HOST: z.string().trim().min(1, "is required"),
-  SMTP_PORT: z.coerce.number().int().min(1).max(65_535),
+  SMTP_PORT: z.enum(["465", "587"]).transform((value) => value === "465" ? 465 as const : 587 as const),
   SMTP_USER: z.string().min(1, "is required"),
   SMTP_PASS: z.string().min(1, "is required"),
-  SMTP_FROM: z.string().trim().min(1, "is required"),
+  SMTP_FROM: z.string().trim().min(1, "is required").refine(
+    isSafeMailbox,
+    "must be a single valid mailbox",
+  ),
 });
 
 export type DatabaseEnv = z.infer<typeof databaseEnvSchema>;

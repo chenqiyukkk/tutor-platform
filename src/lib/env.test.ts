@@ -110,4 +110,30 @@ describe("validateEmailEnv", () => {
       },
     });
   });
+
+  it.each([
+    { field: "APP_URL", value: "http://tutor.example.test" },
+    { field: "SMTP_PORT", value: "25" },
+    { field: "SMTP_PORT", value: "2525" },
+    { field: "SMTP_FROM", value: "first@example.test, second@example.test" },
+    { field: "SMTP_FROM", value: "safe@example.test\r\nBcc: stolen@example.test" },
+  ])("rejects unsafe production $field without exposing its value", ({ field, value }) => {
+    const input = {
+      APP_URL: "https://tutor.example.test",
+      SMTP_HOST: "smtp.example.test",
+      SMTP_PORT: "587",
+      SMTP_USER: "mailer",
+      SMTP_PASS: "smtp-secret",
+      SMTP_FROM: "Tutor Platform <no-reply@example.test>",
+      [field]: value,
+    };
+    const result = validateEmailEnv(input, "production");
+
+    expect(result.success).toBe(false);
+    if (result.success) return;
+    expect(result.error.issues).toEqual(expect.arrayContaining([
+      expect.objectContaining({ path: field }),
+    ]));
+    expect(JSON.stringify(result.error)).not.toContain(value);
+  });
 });

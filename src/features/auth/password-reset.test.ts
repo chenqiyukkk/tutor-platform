@@ -160,7 +160,8 @@ describe("password reset token lifecycle", () => {
     const url = new URL(deliveries[0].resetUrl);
     expect(url.origin).toBe("https://tutor.example.test");
     expect(url.pathname).toBe("/parent/reset-password");
-    expect(url.searchParams.get("token")).toBeTruthy();
+    expect(url.search).toBe("");
+    expect(new URLSearchParams(url.hash.slice(1)).get("token")).toBeTruthy();
     expect(deliveries[0]).toMatchObject({ to: "Mai@Example.COM", role: "parent" });
   });
 

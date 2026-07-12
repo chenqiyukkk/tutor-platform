@@ -7,7 +7,7 @@ import { roleLabels, type AuthRole } from "./schemas";
 
 type PasswordRecoveryPageProps =
   | { mode: "forgot"; role: AuthRole }
-  | { mode: "reset"; role: AuthRole; token: string };
+  | { mode: "reset"; role: AuthRole };
 
 export function PasswordRecoveryPage(props: PasswordRecoveryPageProps) {
   const { mode, role } = props;
@@ -29,7 +29,7 @@ export function PasswordRecoveryPage(props: PasswordRecoveryPageProps) {
         {mode === "forgot" ? (
           <PasswordRecoveryForm mode="forgot" role={role} />
         ) : (
-          <PasswordRecoveryForm mode="reset" role={role} token={props.token} />
+          <PasswordRecoveryForm mode="reset" role={role} />
         )}
         <p className="auth-page__switch">
           <Link href={`/${role}/login`}>返回登录</Link>

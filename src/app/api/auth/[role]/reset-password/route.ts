@@ -1,7 +1,7 @@
 import { createPasswordResetHandlers } from "@/features/auth/password-reset-route";
-import { passwordResetService } from "@/features/auth/server";
+import { getPasswordResetService } from "@/features/auth/server";
 
-const handlers = createPasswordResetHandlers(passwordResetService);
+const handlers = createPasswordResetHandlers(getPasswordResetService);
 
 export async function POST(
   request: Request,

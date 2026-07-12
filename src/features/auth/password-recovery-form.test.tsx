@@ -1,4 +1,4 @@
-import { render, screen } from "@testing-library/react";
+import { render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
@@ -27,12 +27,21 @@ describe("PasswordRecoveryForm", () => {
     }));
   });
 
-  it("submits the URL token with an accessible new-password field and generic failure", async () => {
+  it("reads the token from the fragment, immediately scrubs the URL, and submits it", async () => {
+    window.history.replaceState(null, "", "/parent/reset-password#token=raw-token");
+    const replaceState = vi.spyOn(window.history, "replaceState");
     const fetch = vi.spyOn(globalThis, "fetch").mockResolvedValue(new Response(
       JSON.stringify({ error: INVALID_RESET_TOKEN_MESSAGE }),
       { status: 400, headers: { "content-type": "application/json" } },
     ));
-    render(<PasswordRecoveryForm mode="reset" role="parent" token="raw-token" />);
+    render(<PasswordRecoveryForm mode="reset" role="parent" />);
+
+    await waitFor(() => expect(replaceState).toHaveBeenCalledWith(
+      null,
+      "",
+      "/parent/reset-password",
+    ));
+    expect(window.location.hash).toBe("");
 
     const password = screen.getByLabelText(/^新密码/);
     expect(password).toHaveAttribute("autocomplete", "new-password");
@@ -44,5 +53,13 @@ describe("PasswordRecoveryForm", () => {
       method: "POST",
       body: JSON.stringify({ token: "raw-token", newPassword: "new password long enough" }),
     }));
+  });
+
+  it("disables reset and shows the generic invalid state when the fragment has no token", async () => {
+    window.history.replaceState(null, "", "/teacher/reset-password");
+    render(<PasswordRecoveryForm mode="reset" role="teacher" />);
+
+    expect(await screen.findByRole("alert")).toHaveTextContent(INVALID_RESET_TOKEN_MESSAGE);
+    expect(screen.getByRole("button", { name: "重置密码" })).toBeDisabled();
   });
 });

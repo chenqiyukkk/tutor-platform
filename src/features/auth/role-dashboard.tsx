@@ -6,7 +6,7 @@ import { Logo } from "@/components/brand/logo";
 
 import { requireSessionRole } from "./guards";
 import { roleLabels, type AuthRole } from "./schemas";
-import { authService } from "./server";
+import { getAuthService } from "./server";
 import { sessionCookieNames } from "./session";
 
 export async function RoleDashboard({ role }: { role: AuthRole }) {
@@ -15,7 +15,7 @@ export async function RoleDashboard({ role }: { role: AuthRole }) {
 
   try {
     account = await requireSessionRole(
-      authService,
+      getAuthService(),
       role,
       cookieStore.get(sessionCookieNames[role])?.value,
     );

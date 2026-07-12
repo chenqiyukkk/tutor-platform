@@ -25,8 +25,13 @@ describe("Prisma password reset repository", () => {
   const secret = "integration-reset-secret-with-at-least-32-characters";
 
   afterAll(async () => {
-    if (accountIds.length) await prisma.account.deleteMany({ where: { id: { in: accountIds } } });
-    await prisma.$disconnect();
+    try {
+      if (accountIds.length) {
+        await prisma.account.deleteMany({ where: { id: { in: accountIds } } });
+      }
+    } finally {
+      await prisma.$disconnect();
+    }
   });
 
   it("rejects inactive tokens, then atomically resets once and revokes every session", async () => {

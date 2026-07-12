@@ -1,12 +1,20 @@
-import { NextResponse } from "next/server";
+import { after, NextResponse } from "next/server";
 import { ZodError } from "zod";
 
 import { parseAuthRole } from "./schemas";
 import {
+  FORGOT_PASSWORD_MESSAGE,
   INVALID_RESET_TOKEN_MESSAGE,
   PasswordResetError,
   type PasswordResetService,
 } from "./password-reset";
+
+type PasswordResetServiceSource = PasswordResetService | (() => PasswordResetService);
+type BackgroundScheduler = (task: () => Promise<void>) => void;
+
+function resolveService(source: PasswordResetServiceSource) {
+  return typeof source === "function" ? source() : source;
+}
 
 function jsonError(error: string, status: number) {
   return NextResponse.json({ error }, { status });
@@ -32,7 +40,16 @@ function routeError(error: unknown) {
   throw error;
 }
 
-export function createPasswordResetHandlers(service: PasswordResetService) {
+export function createPasswordResetHandlers(
+  serviceSource: PasswordResetServiceSource,
+  {
+    schedule = (task) => after(task),
+    logger = console,
+  }: {
+    schedule?: BackgroundScheduler;
+    logger?: Pick<Console, "error">;
+  } = {},
+) {
   return {
     async forgotPassword(request: Request, pathRole: string) {
       let role;
@@ -43,8 +60,20 @@ export function createPasswordResetHandlers(service: PasswordResetService) {
       }
       try {
         const body = await readObject(request);
-        const result = await service.requestReset(role, { email: body.email as string });
-        return NextResponse.json(result);
+        try {
+          schedule(async () => {
+            try {
+              await resolveService(serviceSource).requestReset(role, {
+                email: body.email as string,
+              });
+            } catch {
+              logger.error("Password reset background request failed");
+            }
+          });
+        } catch {
+          logger.error("Password reset background request failed");
+        }
+        return NextResponse.json({ message: FORGOT_PASSWORD_MESSAGE });
       } catch (error) {
         return routeError(error);
       }
@@ -59,7 +88,7 @@ export function createPasswordResetHandlers(service: PasswordResetService) {
       }
       try {
         const body = await readObject(request);
-        await service.resetPassword(role, {
+        await resolveService(serviceSource).resetPassword(role, {
           token: body.token as string,
           newPassword: body.newPassword as string,
         });

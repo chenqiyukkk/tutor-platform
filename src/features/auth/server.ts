@@ -8,29 +8,41 @@ import { getEmailEnv, getServerEnv } from "@/lib/env";
 import { PrismaAuthRepository } from "./prisma-repository";
 import { PrismaPasswordResetRepository } from "./password-reset-prisma-repository";
 import { createPasswordResetService } from "./password-reset";
-import { createAuthService } from "./service";
+import { createAuthService, type AuthService } from "./service";
 
-const serverEnv = getServerEnv();
-const emailEnv = getEmailEnv();
+let cachedAuthService: AuthService | undefined;
+let cachedPasswordResetService: ReturnType<typeof createPasswordResetService> | undefined;
 
-export const authService = createAuthService({
-  repository: new PrismaAuthRepository(db),
-  sessionSecret: serverEnv.SESSION_SECRET,
-});
+export function getAuthService() {
+  if (!cachedAuthService) {
+    const serverEnv = getServerEnv();
+    cachedAuthService = createAuthService({
+      repository: new PrismaAuthRepository(db),
+      sessionSecret: serverEnv.SESSION_SECRET,
+    });
+  }
+  return cachedAuthService;
+}
 
-const emailAdapter = emailEnv.mode === "smtp"
-  ? new SmtpEmailAdapter({
-      host: emailEnv.SMTP_HOST,
-      port: emailEnv.SMTP_PORT,
-      user: emailEnv.SMTP_USER,
-      pass: emailEnv.SMTP_PASS,
-      from: emailEnv.SMTP_FROM,
-    })
-  : new ConsoleEmailAdapter();
+export function getPasswordResetService() {
+  if (cachedPasswordResetService) return cachedPasswordResetService;
+  const serverEnv = getServerEnv();
+  const emailEnv = getEmailEnv();
+  const emailAdapter = emailEnv.mode === "smtp"
+    ? new SmtpEmailAdapter({
+        host: emailEnv.SMTP_HOST,
+        port: emailEnv.SMTP_PORT,
+        user: emailEnv.SMTP_USER,
+        pass: emailEnv.SMTP_PASS,
+        from: emailEnv.SMTP_FROM,
+      })
+    : new ConsoleEmailAdapter();
 
-export const passwordResetService = createPasswordResetService({
-  repository: new PrismaPasswordResetRepository(db),
-  email: emailAdapter,
-  appUrl: emailEnv.APP_URL,
-  tokenSecret: serverEnv.SESSION_SECRET,
-});
+  cachedPasswordResetService = createPasswordResetService({
+    repository: new PrismaPasswordResetRepository(db),
+    email: emailAdapter,
+    appUrl: emailEnv.APP_URL,
+    tokenSecret: serverEnv.SESSION_SECRET,
+  });
+  return cachedPasswordResetService;
+}

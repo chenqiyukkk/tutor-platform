@@ -21,7 +21,7 @@ describe("password recovery pages", () => {
     expect(screen.getByRole("heading", { name: "找回管理员账户" })).toBeInTheDocument();
     expect(screen.getByRole("link", { name: "返回登录" })).toHaveAttribute("href", "/admin/login");
 
-    rerender(<PasswordRecoveryPage mode="reset" role="teacher" token="raw-token" />);
+    rerender(<PasswordRecoveryPage mode="reset" role="teacher" />);
     expect(screen.getByRole("heading", { name: "设置新密码" })).toBeInTheDocument();
   });
 });

@@ -132,7 +132,7 @@ export function createPasswordResetService({
         });
 
         const resetUrl = new URL(`/${role}/reset-password`, applicationUrl);
-        resetUrl.searchParams.set("token", token);
+        resetUrl.hash = new URLSearchParams({ token }).toString();
         await email.sendPasswordReset({
           to: account.email,
           role,
