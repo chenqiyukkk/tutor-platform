@@ -1,9 +1,9 @@
 import { PrismaPg } from "@prisma/adapter-pg";
 import { PrismaClient } from "@prisma/client";
 
-import { getServerEnv } from "../src/lib/env";
+import { getDatabaseEnv } from "../src/lib/env";
 
-const adapter = new PrismaPg({ connectionString: getServerEnv().DATABASE_URL });
+const adapter = new PrismaPg({ connectionString: getDatabaseEnv().DATABASE_URL });
 const prisma = new PrismaClient({ adapter });
 
 const subjects = [

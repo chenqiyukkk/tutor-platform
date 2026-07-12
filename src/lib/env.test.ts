@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { validateServerEnv } from "./env";
+import { getDatabaseEnv, validateServerEnv } from "./env";
 
 describe("validateServerEnv", () => {
   it("returns structured issues when required variables are missing", () => {
@@ -17,10 +17,12 @@ describe("validateServerEnv", () => {
     );
   });
 
-  it("rejects invalid values without exposing the session secret", () => {
+  it("rejects invalid values without exposing database credentials or the session secret", () => {
+    const databaseUrl =
+      "mysql://sensitive-db-user:sensitive-db-password@db.example.test:3306/tutor_platform";
     const secret = "too-short-secret";
     const result = validateServerEnv({
-      DATABASE_URL: "not-a-postgres-url",
+      DATABASE_URL: databaseUrl,
       SESSION_SECRET: secret,
     });
 
@@ -33,6 +35,8 @@ describe("validateServerEnv", () => {
         expect.objectContaining({ path: "SESSION_SECRET" }),
       ]),
     );
+    expect(JSON.stringify(result.error)).not.toContain(databaseUrl);
+    expect(JSON.stringify(result.error)).not.toContain("sensitive-db-password");
     expect(JSON.stringify(result.error)).not.toContain(secret);
   });
 
@@ -43,5 +47,13 @@ describe("validateServerEnv", () => {
     };
 
     expect(validateServerEnv(input)).toEqual({ success: true, data: input });
+  });
+
+  it("loads database configuration without requiring the application session secret", () => {
+    const databaseUrl = "postgresql://tutor:tutor@127.0.0.1:5432/tutor_platform";
+
+    expect(getDatabaseEnv({ DATABASE_URL: databaseUrl })).toEqual({
+      DATABASE_URL: databaseUrl,
+    });
   });
 });

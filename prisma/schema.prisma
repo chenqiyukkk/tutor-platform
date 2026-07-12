@@ -55,6 +55,7 @@ enum VerificationStatus {
 }
 
 model Account {
+  /// Accounts are deactivated through status; historical relations restrict hard deletion.
   id                 String        @id @default(uuid()) @db.Uuid
   role               AccountRole
   status             AccountStatus @default(ACTIVE)
@@ -69,6 +70,7 @@ model Account {
 
   teacherProfile        TeacherProfile?
   parentProfile         ParentProfile?
+  ownedFavorites        Favorite[]
   sessions              Session[]
   passwordResetTokens   PasswordResetToken[]
   sentGreetings         Greeting[]           @relation("SentGreetings")
@@ -149,10 +151,9 @@ model ParentProfile {
   createdAt   DateTime      @default(now()) @db.Timestamptz(3)
   updatedAt   DateTime      @updatedAt @db.Timestamptz(3)
 
-  account   Account           @relation(fields: [accountId], references: [id], onDelete: Cascade)
-  students  StudentProfile[]
-  requests  TutoringRequest[]
-  favorites Favorite[]
+  account  Account           @relation(fields: [accountId], references: [id], onDelete: Cascade)
+  students StudentProfile[]
+  requests TutoringRequest[]
 }
 
 model StudentProfile {
@@ -256,6 +257,7 @@ model TutoringRequest {
   studentProfile StudentProfile?  @relation(fields: [studentProfileId], references: [id], onDelete: SetNull)
   region         Region?          @relation(fields: [regionId], references: [id], onDelete: SetNull)
   subjects       RequestSubject[]
+  favorites      Favorite[]
   greetings      Greeting[]
   reports        Report[]
 
@@ -278,16 +280,20 @@ model RequestSubject {
 }
 
 model Favorite {
-  id               String   @id @default(uuid()) @db.Uuid
-  parentProfileId  String   @db.Uuid
-  teacherProfileId String   @db.Uuid
-  createdAt        DateTime @default(now()) @db.Timestamptz(3)
+  id                String   @id @default(uuid()) @db.Uuid
+  ownerAccountId    String   @db.Uuid
+  teacherProfileId  String?  @db.Uuid
+  tutoringRequestId String?  @db.Uuid
+  createdAt         DateTime @default(now()) @db.Timestamptz(3)
 
-  parentProfile  ParentProfile  @relation(fields: [parentProfileId], references: [id], onDelete: Cascade)
-  teacherProfile TeacherProfile @relation(fields: [teacherProfileId], references: [id], onDelete: Cascade)
+  owner           Account          @relation(fields: [ownerAccountId], references: [id], onDelete: Cascade)
+  teacherProfile  TeacherProfile?  @relation(fields: [teacherProfileId], references: [id], onDelete: Cascade)
+  tutoringRequest TutoringRequest? @relation(fields: [tutoringRequestId], references: [id], onDelete: Cascade)
 
-  @@unique([parentProfileId, teacherProfileId])
+  @@unique([ownerAccountId, teacherProfileId])
+  @@unique([ownerAccountId, tutoringRequestId])
   @@index([teacherProfileId])
+  @@index([tutoringRequestId])
 }
 
 model Greeting {
@@ -301,9 +307,9 @@ model Greeting {
   createdAt          DateTime       @default(now()) @db.Timestamptz(3)
   updatedAt          DateTime       @updatedAt @db.Timestamptz(3)
 
-  sender          Account         @relation("SentGreetings", fields: [senderAccountId], references: [id], onDelete: Cascade)
-  recipient       Account         @relation("ReceivedGreetings", fields: [recipientAccountId], references: [id], onDelete: Cascade)
-  tutoringRequest TutoringRequest @relation(fields: [tutoringRequestId], references: [id], onDelete: Cascade)
+  sender          Account         @relation("SentGreetings", fields: [senderAccountId], references: [id], onDelete: Restrict)
+  recipient       Account         @relation("ReceivedGreetings", fields: [recipientAccountId], references: [id], onDelete: Restrict)
+  tutoringRequest TutoringRequest @relation(fields: [tutoringRequestId], references: [id], onDelete: Restrict)
   conversation    Conversation?
 
   @@unique([senderAccountId, recipientAccountId, tutoringRequestId])
@@ -320,9 +326,9 @@ model Conversation {
   createdAt     DateTime  @default(now()) @db.Timestamptz(3)
   updatedAt     DateTime  @updatedAt @db.Timestamptz(3)
 
-  greeting Greeting  @relation(fields: [greetingId], references: [id], onDelete: Cascade)
-  teacher  Account   @relation("TeacherConversations", fields: [teacherId], references: [id], onDelete: Cascade)
-  parent   Account   @relation("ParentConversations", fields: [parentId], references: [id], onDelete: Cascade)
+  greeting Greeting  @relation(fields: [greetingId], references: [id], onDelete: Restrict)
+  teacher  Account   @relation("TeacherConversations", fields: [teacherId], references: [id], onDelete: Restrict)
+  parent   Account   @relation("ParentConversations", fields: [parentId], references: [id], onDelete: Restrict)
   messages Message[]
   reports  Report[]
 
@@ -337,11 +343,12 @@ model Message {
   clientMessageId String
   body            String
   sentAt          DateTime  @default(now()) @db.Timestamptz(3)
+  readAt          DateTime? @db.Timestamptz(3)
   editedAt        DateTime? @db.Timestamptz(3)
   deletedAt       DateTime? @db.Timestamptz(3)
 
-  conversation Conversation @relation(fields: [conversationId], references: [id], onDelete: Cascade)
-  sender       Account      @relation(fields: [senderAccountId], references: [id], onDelete: Cascade)
+  conversation Conversation @relation(fields: [conversationId], references: [id], onDelete: Restrict)
+  sender       Account      @relation(fields: [senderAccountId], references: [id], onDelete: Restrict)
   reports      Report[]
 
   @@unique([conversationId, clientMessageId])
@@ -379,7 +386,7 @@ model Report {
   createdAt         DateTime     @default(now()) @db.Timestamptz(3)
   updatedAt         DateTime     @updatedAt @db.Timestamptz(3)
 
-  reporter        Account          @relation("ReportReporter", fields: [reporterAccountId], references: [id], onDelete: Cascade)
+  reporter        Account          @relation("ReportReporter", fields: [reporterAccountId], references: [id], onDelete: Restrict)
   reportedAccount Account?         @relation("ReportSubject", fields: [reportedAccountId], references: [id], onDelete: SetNull)
   reviewer        Account?         @relation("ReportReviewer", fields: [reviewerAccountId], references: [id], onDelete: SetNull)
   tutoringRequest TutoringRequest? @relation(fields: [tutoringRequestId], references: [id], onDelete: SetNull)

@@ -1,14 +1,16 @@
+import "server-only";
+
 import { PrismaPg } from "@prisma/adapter-pg";
 import { PrismaClient } from "@prisma/client";
 
-import { getServerEnv } from "./env";
+import { getDatabaseEnv } from "./env";
 
 const globalForPrisma = globalThis as unknown as {
   prisma?: PrismaClient;
 };
 
 function createPrismaClient() {
-  const adapter = new PrismaPg({ connectionString: getServerEnv().DATABASE_URL });
+  const adapter = new PrismaPg({ connectionString: getDatabaseEnv().DATABASE_URL });
   return new PrismaClient({ adapter });
 }
 
