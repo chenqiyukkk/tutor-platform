@@ -33,6 +33,7 @@ export function FormField({
 }: FormFieldProps) {
   const hintId = `${htmlFor}-hint`;
   const errorId = `${htmlFor}-error`;
+  const isRequired = required || children.props.required;
   const describedBy = [
     children.props["aria-describedby"],
     hint ? hintId : undefined,
@@ -47,15 +48,15 @@ export function FormField({
       : children.props["aria-errormessage"],
     "aria-invalid": error ? true : children.props["aria-invalid"],
     id: htmlFor,
-    required: required || children.props.required || undefined,
+    required: isRequired || undefined,
   });
 
   return (
     <div className={`form-field ${error ? "form-field--error" : ""}`.trim()}>
       <label htmlFor={htmlFor}>
         {label}
-        {required ? <span aria-hidden="true"> *</span> : null}
-        {required ? <span className="sr-only">（必填）</span> : null}
+        {isRequired ? <span aria-hidden="true"> *</span> : null}
+        {isRequired ? <span className="sr-only">（必填）</span> : null}
       </label>
       {hint ? (
         <p className="form-field__hint" id={hintId}>

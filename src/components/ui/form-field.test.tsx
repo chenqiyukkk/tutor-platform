@@ -52,4 +52,18 @@ describe("FormField", () => {
     expect(textarea).not.toHaveAttribute("aria-errormessage");
     expect(textarea).not.toBeRequired();
   });
+
+  it("reflects a child's required state in the label and form control", () => {
+    render(
+      <FormField htmlFor="email" label="邮箱">
+        <input name="email" required type="email" />
+      </FormField>,
+    );
+
+    const input = screen.getByRole("textbox", { name: /邮箱/ });
+    const label = screen.getByText("邮箱", { exact: false, selector: "label" });
+
+    expect(label).toHaveTextContent("邮箱 *（必填）");
+    expect(input).toBeRequired();
+  });
 });

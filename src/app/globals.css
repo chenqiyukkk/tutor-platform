@@ -725,7 +725,22 @@ h3 {
   .closing-cta__actions .button { width: 100%; }
   .public-footer__grid { grid-template-columns: 1fr; }
   .public-footer__legal { grid-column: auto; }
-  .pagination { gap: var(--space-1); }
+  .pagination {
+    width: 100%;
+    padding: var(--space-1);
+    justify-content: flex-start;
+    gap: var(--space-1);
+    overflow-x: auto;
+    overscroll-behavior-inline: contain;
+    scroll-padding-inline: var(--space-1);
+    scroll-snap-type: inline proximity;
+    scrollbar-width: thin;
+    -webkit-overflow-scrolling: touch;
+  }
+  .pagination > a,
+  .pagination > span,
+  .pagination ol { flex: 0 0 auto; }
+  .pagination a[aria-current="page"] { scroll-snap-align: center; }
 }
 
 @media (prefers-reduced-motion: reduce) {
