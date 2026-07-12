@@ -1,7 +1,7 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 
 import { requireSessionRole } from "./guards";
-import { verifyPassword } from "./password";
+import { getDummyPasswordHash, verifyPassword } from "./password";
 import {
   AuthError,
   createAuthService,
@@ -133,6 +133,15 @@ describe("auth service", () => {
     await expect(verifyPassword(stored, password)).resolves.toBe(true);
   });
 
+  it("uses a valid cached Argon2id dummy hash that never matches login input", async () => {
+    const first = getDummyPasswordHash();
+    const second = getDummyPasswordHash();
+
+    expect(second).toBe(first);
+    await expect(first).resolves.toMatch(/^\$argon2id\$/);
+    await expect(verifyPassword(await first, "wrong password")).resolves.toBe(false);
+  });
+
   it("returns the same generic error for an unknown user and a wrong password", async () => {
     const repository = new MemoryAuthRepository();
     const service = createAuthService({ repository, sessionSecret: SESSION_SECRET });
@@ -147,12 +156,101 @@ describe("auth service", () => {
       password: "wrong password",
     });
 
-    await expect(unknown).rejects.toEqual(
-      new AuthError("INVALID_CREDENTIALS", "账号或密码错误"),
+    await Promise.all([
+      expect(unknown).rejects.toEqual(
+        new AuthError("INVALID_CREDENTIALS", "账号或密码错误"),
+      ),
+      expect(incorrect).rejects.toEqual(
+        new AuthError("INVALID_CREDENTIALS", "账号或密码错误"),
+      ),
+    ]);
+  });
+
+  it("performs exactly one dummy password verification for an unknown account", async () => {
+    const repository = new MemoryAuthRepository();
+    const verifyPasswordHash = vi.fn().mockResolvedValue(false);
+    const service = createAuthService({
+      repository,
+      sessionSecret: SESSION_SECRET,
+      verifyPasswordHash,
+      getDummyPasswordHash: async () => "dummy-argon2id-hash",
+    });
+
+    await expect(service.login("teacher", {
+      identifier: "missing@example.com",
+      password: "wrong password",
+    })).rejects.toEqual(new AuthError("INVALID_CREDENTIALS", "账号或密码错误"));
+
+    expect(verifyPasswordHash).toHaveBeenCalledExactlyOnceWith(
+      "dummy-argon2id-hash",
+      "wrong password",
     );
-    await expect(incorrect).rejects.toEqual(
-      new AuthError("INVALID_CREDENTIALS", "账号或密码错误"),
+  });
+
+  it.each(["suspended", "disabled"] as const)(
+    "performs exactly one password verification for a %s account",
+    async (status) => {
+      const repository = new MemoryAuthRepository();
+      const verifyPasswordHash = vi.fn().mockResolvedValue(true);
+      const service = createAuthService({
+        repository,
+        sessionSecret: SESSION_SECRET,
+        verifyPasswordHash,
+        getDummyPasswordHash: async () => "dummy-argon2id-hash",
+      });
+      await service.register("teacher", registration());
+      repository.accounts[0].status = status;
+
+      await expect(service.login("teacher", {
+        identifier: "mai@example.com",
+        password: registration().password,
+      })).rejects.toEqual(new AuthError("INVALID_CREDENTIALS", "账号或密码错误"));
+
+      expect(verifyPasswordHash).toHaveBeenCalledExactlyOnceWith(
+        repository.accounts[0].passwordHash,
+        registration().password,
+      );
+    },
+  );
+
+  it("performs exactly one verification for an active account with a wrong password", async () => {
+    const repository = new MemoryAuthRepository();
+    const verifyPasswordHash = vi.fn().mockResolvedValue(false);
+    const service = createAuthService({
+      repository,
+      sessionSecret: SESSION_SECRET,
+      verifyPasswordHash,
+      getDummyPasswordHash: async () => "dummy-argon2id-hash",
+    });
+    await service.register("teacher", registration());
+
+    await expect(service.login("teacher", {
+      identifier: "mai@example.com",
+      password: "wrong password",
+    })).rejects.toEqual(new AuthError("INVALID_CREDENTIALS", "账号或密码错误"));
+
+    expect(verifyPasswordHash).toHaveBeenCalledExactlyOnceWith(
+      repository.accounts[0].passwordHash,
+      "wrong password",
     );
+  });
+
+  it("converts a damaged password hash verification error to generic credentials failure", async () => {
+    const repository = new MemoryAuthRepository();
+    const verifyPasswordHash = vi.fn().mockRejectedValue(new Error("invalid hash encoding"));
+    const service = createAuthService({
+      repository,
+      sessionSecret: SESSION_SECRET,
+      verifyPasswordHash,
+      getDummyPasswordHash: async () => "dummy-argon2id-hash",
+    });
+    await service.register("teacher", registration());
+
+    await expect(service.login("teacher", {
+      identifier: "mai@example.com",
+      password: "wrong password",
+    })).rejects.toEqual(new AuthError("INVALID_CREDENTIALS", "账号或密码错误"));
+    expect(verifyPasswordHash).toHaveBeenCalledTimes(1);
   });
 
   it("returns an opaque random token while persisting only its keyed digest", async () => {
@@ -209,6 +307,77 @@ describe("auth service", () => {
       code: "UNAUTHORIZED",
     });
     await expect(requireSessionRole(service, "admin", token)).rejects.toMatchObject({
+      code: "UNAUTHORIZED",
+    });
+  });
+
+  it("rejects an expired session", async () => {
+    const repository = new MemoryAuthRepository();
+    let currentTime = new Date("2030-01-01T00:00:00Z");
+    const service = createAuthService({
+      repository,
+      sessionSecret: SESSION_SECRET,
+      now: () => currentTime,
+      createToken: () => "fixed-expiring-session-token-that-is-long-enough",
+      sessionDurationMs: 1_000,
+    });
+    await service.register("teacher", registration());
+    const { token } = await service.login("teacher", {
+      identifier: "mai@example.com",
+      password: registration().password,
+    });
+    currentTime = new Date("2030-01-01T00:00:01Z");
+
+    await expect(service.getSession("teacher", token)).rejects.toMatchObject({
+      code: "UNAUTHORIZED",
+    });
+  });
+
+  it("rejects a session marked as revoked", async () => {
+    const repository = new MemoryAuthRepository();
+    const service = createAuthService({ repository, sessionSecret: SESSION_SECRET });
+    await service.register("teacher", registration());
+    const { token } = await service.login("teacher", {
+      identifier: "mai@example.com",
+      password: registration().password,
+    });
+    repository.sessions[0].revokedAt = new Date();
+
+    await expect(service.getSession("teacher", token)).rejects.toMatchObject({
+      code: "UNAUTHORIZED",
+    });
+  });
+
+  it.each(["suspended", "disabled"] as const)(
+    "rejects an existing session after its account becomes %s",
+    async (status) => {
+      const repository = new MemoryAuthRepository();
+      const service = createAuthService({ repository, sessionSecret: SESSION_SECRET });
+      await service.register("teacher", registration());
+      const { token } = await service.login("teacher", {
+        identifier: "mai@example.com",
+        password: registration().password,
+      });
+      repository.accounts[0].status = status;
+
+      await expect(service.getSession("teacher", token)).rejects.toMatchObject({
+        code: "UNAUTHORIZED",
+      });
+    },
+  );
+
+  it("invalidates a token after logout revokes its session", async () => {
+    const repository = new MemoryAuthRepository();
+    const service = createAuthService({ repository, sessionSecret: SESSION_SECRET });
+    await service.register("teacher", registration());
+    const { token } = await service.login("teacher", {
+      identifier: "mai@example.com",
+      password: registration().password,
+    });
+
+    await service.logout("teacher", token);
+
+    await expect(service.getSession("teacher", token)).rejects.toMatchObject({
       code: "UNAUTHORIZED",
     });
   });

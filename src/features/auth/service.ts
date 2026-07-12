@@ -1,4 +1,8 @@
-import { hashPassword, verifyPassword } from "./password";
+import {
+  getDummyPasswordHash as getCachedDummyPasswordHash,
+  hashPassword,
+  verifyPassword,
+} from "./password";
 import {
   loginSchema,
   normalizeEmail,
@@ -97,12 +101,16 @@ export function createAuthService({
   now = () => new Date(),
   createToken = generateSessionToken,
   sessionDurationMs = SESSION_DURATION_MS,
+  verifyPasswordHash = verifyPassword,
+  getDummyPasswordHash = getCachedDummyPasswordHash,
 }: {
   repository: AuthRepository;
   sessionSecret: string;
   now?: () => Date;
   createToken?: () => string;
   sessionDurationMs?: number;
+  verifyPasswordHash?: (passwordHash: string, password: string) => Promise<boolean>;
+  getDummyPasswordHash?: () => Promise<string>;
 }) {
   assertSessionSecret(sessionSecret);
 
@@ -145,11 +153,15 @@ export function createAuthService({
         ? await repository.findAccountByEmail(role, normalizeEmail(identifier))
         : await repository.findAccountByUsername(role, normalizeUsername(identifier));
 
-      if (!account || account.status !== "active") {
-        throw invalidCredentials();
+      let passwordMatches = false;
+      try {
+        const passwordHash = account?.passwordHash ?? await getDummyPasswordHash();
+        passwordMatches = await verifyPasswordHash(passwordHash, input.password);
+      } catch {
+        passwordMatches = false;
       }
 
-      if (!(await verifyPassword(account.passwordHash, input.password))) {
+      if (!account || account.status !== "active" || !passwordMatches) {
         throw invalidCredentials();
       }
 

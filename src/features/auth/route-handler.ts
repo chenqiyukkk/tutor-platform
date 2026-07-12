@@ -52,8 +52,14 @@ function routeError(error: unknown) {
 export function createRoleAuthHandlers(service: AuthService) {
   return {
     async register(request: Request, pathRole: string) {
+      let role;
       try {
-        const role = parsePublicAuthRole(pathRole);
+        role = parsePublicAuthRole(pathRole);
+      } catch {
+        return jsonError("不支持该注册入口", 404);
+      }
+
+      try {
         const input = registerSchema.parse(await readJson(request));
         await service.register(role, input);
         const session = await service.login(role, {
@@ -68,9 +74,6 @@ export function createRoleAuthHandlers(service: AuthService) {
         });
         return response;
       } catch (error) {
-        if (error instanceof ZodError && error.issues.some((issue) => issue.path.length === 0)) {
-          return jsonError("不支持该注册入口", 404);
-        }
         return routeError(error);
       }
     },

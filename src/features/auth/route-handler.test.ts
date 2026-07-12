@@ -54,6 +54,40 @@ describe("role-scoped authentication routes", () => {
     expect(calls).toEqual(["register:teacher", "login:teacher"]);
   });
 
+  it.each([
+    { label: "null", body: "null" },
+    { label: "an array", body: "[]" },
+    { label: "invalid JSON", body: "{" },
+  ])("returns 400 when the registration body root is $label", async ({ body }) => {
+    const handlers = createRoleAuthHandlers({} as AuthService);
+    const request = new Request("http://localhost/api/auth/teacher/register", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body,
+    });
+
+    const response = await handlers.register(request, "teacher");
+
+    expect(response.status).toBe(400);
+  });
+
+  it("returns 404 for an unsupported public registration path role", async () => {
+    const handlers = createRoleAuthHandlers({} as AuthService);
+    const request = new Request("http://localhost/api/auth/admin/register", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        username: "admin-user",
+        email: "admin@example.com",
+        password: "long-enough-password",
+      }),
+    });
+
+    const response = await handlers.register(request, "admin");
+
+    expect(response.status).toBe(404);
+  });
+
   it("does not expose whether the account or password was wrong", async () => {
     const service = {
       async login() {
