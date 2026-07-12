@@ -26,36 +26,73 @@ async function seedSubjects() {
 }
 
 async function seedRegions() {
-  const beijing = await prisma.region.upsert({
-    where: { code: "110000" },
-    update: { name: "北京市", level: 1, sortOrder: 10, isActive: true },
-    create: { code: "110000", name: "北京市", level: 1, sortOrder: 10 },
+  const guangdong = await prisma.region.upsert({
+    where: { code: "440000" },
+    update: { name: "广东省", level: 1, parentId: null, sortOrder: 10, isActive: true },
+    create: { code: "440000", name: "广东省", level: 1, sortOrder: 10 },
   });
 
-  const shanghai = await prisma.region.upsert({
-    where: { code: "310000" },
-    update: { name: "上海市", level: 1, sortOrder: 20, isActive: true },
-    create: { code: "310000", name: "上海市", level: 1, sortOrder: 20 },
-  });
-
-  const districts = [
-    { code: "110105", name: "朝阳区", parentId: beijing.id, sortOrder: 10 },
-    { code: "110108", name: "海淀区", parentId: beijing.id, sortOrder: 20 },
-    { code: "310101", name: "黄浦区", parentId: shanghai.id, sortOrder: 10 },
-    { code: "310115", name: "浦东新区", parentId: shanghai.id, sortOrder: 20 },
+  const cityFixtures = [
+    { code: "440100", name: "广州市", sortOrder: 10 },
+    { code: "440300", name: "深圳市", sortOrder: 20 },
   ];
+  const cities = new Map<string, string>();
 
-  for (const district of districts) {
-    await prisma.region.upsert({
+  for (const city of cityFixtures) {
+    const saved = await prisma.region.upsert({
+      where: { code: city.code },
+      update: {
+        name: city.name,
+        level: 2,
+        parentId: guangdong.id,
+        sortOrder: city.sortOrder,
+        isActive: true,
+      },
+      create: { ...city, level: 2, parentId: guangdong.id },
+    });
+    cities.set(city.code, saved.id);
+  }
+
+  const districtFixtures = [
+    { code: "440104", name: "越秀区", cityCode: "440100", sortOrder: 10 },
+    { code: "440106", name: "天河区", cityCode: "440100", sortOrder: 20 },
+    { code: "440304", name: "福田区", cityCode: "440300", sortOrder: 10 },
+    { code: "440305", name: "南山区", cityCode: "440300", sortOrder: 20 },
+  ];
+  const districts = new Map<string, string>();
+
+  for (const district of districtFixtures) {
+    const parentId = cities.get(district.cityCode);
+    if (!parentId) throw new Error(`Missing city fixture ${district.cityCode}`);
+    const saved = await prisma.region.upsert({
       where: { code: district.code },
       update: {
         name: district.name,
-        level: 2,
-        parentId: district.parentId,
+        level: 3,
+        parentId,
         sortOrder: district.sortOrder,
         isActive: true,
       },
-      create: { ...district, level: 2 },
+      create: {
+        code: district.code,
+        name: district.name,
+        level: 3,
+        parentId,
+        sortOrder: district.sortOrder,
+      },
+    });
+    districts.set(district.code, saved.id);
+  }
+
+  for (const [leftCode, rightCode] of [["440104", "440106"], ["440304", "440305"]]) {
+    const leftId = districts.get(leftCode);
+    const rightId = districts.get(rightCode);
+    if (!leftId || !rightId) throw new Error("Missing district adjacency fixture");
+    const [regionAId, regionBId] = [leftId, rightId].sort();
+    await prisma.regionAdjacency.upsert({
+      where: { regionAId_regionBId: { regionAId, regionBId } },
+      update: {},
+      create: { regionAId, regionBId },
     });
   }
 }

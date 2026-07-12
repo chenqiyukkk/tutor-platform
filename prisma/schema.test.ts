@@ -76,3 +76,23 @@ describe("password reset token schema", () => {
     expect(sql).toContain('ADD COLUMN "activatedAt" TIMESTAMPTZ(3)');
   });
 });
+
+describe("region adjacency schema", () => {
+  it("stores each canonical undirected district pair once and rejects self adjacency", () => {
+    expect(schema).toContain("model RegionAdjacency");
+    expect(schema).toMatch(/regionAId\s+String\s+@db\.Uuid/);
+    expect(schema).toMatch(/regionBId\s+String\s+@db\.Uuid/);
+
+    const regionMigration = readdirSync(migrationsDirectory, { withFileTypes: true }).find(
+      (entry) => entry.isDirectory() && entry.name.endsWith("_region_adjacency"),
+    );
+    expect(regionMigration).toBeDefined();
+    const sql = readFileSync(
+      join(migrationsDirectory, regionMigration!.name, "migration.sql"),
+      "utf8",
+    );
+    expect(sql).toContain('CREATE UNIQUE INDEX "RegionAdjacency_regionAId_regionBId_key"');
+    expect(sql).toContain('CONSTRAINT "RegionAdjacency_canonical_pair_check"');
+    expect(sql).toContain('CHECK ("regionAId" < "regionBId")');
+  });
+});

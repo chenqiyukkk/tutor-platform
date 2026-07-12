@@ -203,11 +203,26 @@ model Region {
 
   parent       Region?              @relation("RegionHierarchy", fields: [parentId], references: [id], onDelete: Restrict)
   children     Region[]             @relation("RegionHierarchy")
+  adjacencyAs  RegionAdjacency[]    @relation("RegionAdjacencyA")
+  adjacencyBs  RegionAdjacency[]    @relation("RegionAdjacencyB")
   serviceAreas TeacherServiceArea[]
   requests     TutoringRequest[]
 
   @@index([parentId, sortOrder])
   @@index([level, isActive])
+}
+
+model RegionAdjacency {
+  id        String   @id @default(uuid()) @db.Uuid
+  regionAId String   @db.Uuid
+  regionBId String   @db.Uuid
+  createdAt DateTime @default(now()) @db.Timestamptz(3)
+
+  regionA Region @relation("RegionAdjacencyA", fields: [regionAId], references: [id], onDelete: Cascade)
+  regionB Region @relation("RegionAdjacencyB", fields: [regionBId], references: [id], onDelete: Cascade)
+
+  @@unique([regionAId, regionBId])
+  @@index([regionBId])
 }
 
 model TeacherSubject {
