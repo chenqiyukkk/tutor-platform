@@ -13,11 +13,36 @@ const serverEnvSchema = databaseEnvSchema.extend({
   SESSION_SECRET: z.string().min(32, "must contain at least 32 characters"),
 });
 
+const consoleEmailEnvSchema = z.object({
+  APP_URL: z.url("must be a valid URL").default("http://localhost:3000"),
+});
+
+const smtpEmailEnvSchema = z.object({
+  APP_URL: z.url("must be a valid URL"),
+  SMTP_HOST: z.string().trim().min(1, "is required"),
+  SMTP_PORT: z.coerce.number().int().min(1).max(65_535),
+  SMTP_USER: z.string().min(1, "is required"),
+  SMTP_PASS: z.string().min(1, "is required"),
+  SMTP_FROM: z.string().trim().min(1, "is required"),
+});
+
 export type DatabaseEnv = z.infer<typeof databaseEnvSchema>;
 export type ServerEnv = z.infer<typeof serverEnvSchema>;
+export type EmailEnv =
+  | ({ mode: "console" } & z.infer<typeof consoleEmailEnvSchema>)
+  | ({ mode: "smtp" } & z.infer<typeof smtpEmailEnvSchema>);
+
+type EnvironmentVariable = keyof ServerEnv
+  | "APP_URL"
+  | "SMTP_HOST"
+  | "SMTP_PORT"
+  | "SMTP_USER"
+  | "SMTP_PASS"
+  | "SMTP_FROM"
+  | "environment";
 
 export type EnvironmentIssue = {
-  path: keyof ServerEnv | "environment";
+  path: EnvironmentVariable;
   code: string;
   message: string;
 };
@@ -32,10 +57,37 @@ export type DatabaseEnvironmentValidationResult =
 
 function toEnvironmentIssues(error: z.ZodError): EnvironmentIssue[] {
   return error.issues.map((issue) => ({
-    path: (issue.path[0] as keyof ServerEnv | undefined) ?? "environment",
+    path: (issue.path[0] as EnvironmentVariable | undefined) ?? "environment",
     code: issue.code,
     message: issue.message,
   }));
+}
+
+export type EmailEnvironmentValidationResult =
+  | { success: true; data: EmailEnv }
+  | { success: false; error: { name: "EnvironmentValidationError"; issues: EnvironmentIssue[] } };
+
+export function validateEmailEnv(
+  input: Record<string, string | undefined>,
+  nodeEnv: string = process.env.NODE_ENV ?? "development",
+): EmailEnvironmentValidationResult {
+  const schema = nodeEnv === "production" ? smtpEmailEnvSchema : consoleEmailEnvSchema;
+  const result = schema.safeParse(input);
+  if (result.success) {
+    return {
+      success: true,
+      data: nodeEnv === "production"
+        ? { mode: "smtp", ...result.data } as EmailEnv
+        : { mode: "console", ...result.data } as EmailEnv,
+    };
+  }
+  return {
+    success: false,
+    error: {
+      name: "EnvironmentValidationError",
+      issues: toEnvironmentIssues(result.error),
+    },
+  };
 }
 
 export function validateDatabaseEnv(
@@ -106,5 +158,14 @@ export function getServerEnv(
     throw new EnvironmentValidationError(result.error.issues);
   }
 
+  return result.data;
+}
+
+export function getEmailEnv(
+  input: Record<string, string | undefined> = process.env,
+  nodeEnv: string = process.env.NODE_ENV ?? "development",
+): EmailEnv {
+  const result = validateEmailEnv(input, nodeEnv);
+  if (!result.success) throw new EnvironmentValidationError(result.error.issues);
   return result.data;
 }

@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { getDatabaseEnv, validateServerEnv } from "./env";
+import { getDatabaseEnv, validateEmailEnv, validateServerEnv } from "./env";
 
 describe("validateServerEnv", () => {
   it("returns structured issues when required variables are missing", () => {
@@ -54,6 +54,60 @@ describe("validateServerEnv", () => {
 
     expect(getDatabaseEnv({ DATABASE_URL: databaseUrl })).toEqual({
       DATABASE_URL: databaseUrl,
+    });
+  });
+});
+
+describe("validateEmailEnv", () => {
+  it("uses the console adapter only outside production", () => {
+    expect(validateEmailEnv({}, "development")).toEqual({
+      success: true,
+      data: { mode: "console", APP_URL: "http://localhost:3000" },
+    });
+    expect(validateEmailEnv({}, "test")).toEqual({
+      success: true,
+      data: { mode: "console", APP_URL: "http://localhost:3000" },
+    });
+  });
+
+  it("fails closed in production when any SMTP setting or APP_URL is missing", () => {
+    const result = validateEmailEnv({
+      APP_URL: "https://tutor.example.test",
+      SMTP_HOST: "smtp.example.test",
+      SMTP_USER: "sensitive-user",
+      SMTP_PASS: "sensitive-password",
+    }, "production");
+
+    expect(result.success).toBe(false);
+    if (result.success) return;
+    expect(result.error.issues).toEqual(expect.arrayContaining([
+      expect.objectContaining({ path: "SMTP_PORT" }),
+      expect.objectContaining({ path: "SMTP_FROM" }),
+    ]));
+    expect(JSON.stringify(result.error)).not.toContain("sensitive-user");
+    expect(JSON.stringify(result.error)).not.toContain("sensitive-password");
+  });
+
+  it("returns a complete SMTP configuration in production", () => {
+    const input = {
+      APP_URL: "https://tutor.example.test",
+      SMTP_HOST: "smtp.example.test",
+      SMTP_PORT: "587",
+      SMTP_USER: "mailer",
+      SMTP_PASS: "smtp-secret",
+      SMTP_FROM: "Tutor Platform <no-reply@example.test>",
+    };
+    expect(validateEmailEnv(input, "production")).toEqual({
+      success: true,
+      data: {
+        mode: "smtp",
+        APP_URL: input.APP_URL,
+        SMTP_HOST: input.SMTP_HOST,
+        SMTP_PORT: 587,
+        SMTP_USER: input.SMTP_USER,
+        SMTP_PASS: input.SMTP_PASS,
+        SMTP_FROM: input.SMTP_FROM,
+      },
     });
   });
 });

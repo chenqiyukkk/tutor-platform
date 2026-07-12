@@ -19,6 +19,10 @@ const migrationSql = readFileSync(
   "utf8",
 );
 
+const passwordResetMigration = readdirSync(migrationsDirectory, { withFileTypes: true }).find(
+  (entry) => entry.isDirectory() && entry.name.endsWith("_password_reset_activation"),
+);
+
 describe("database integrity schema", () => {
   it("supports account-owned favorites with exactly one target", () => {
     expect(schema).toMatch(/ownerAccountId\s+String\s+@db\.Uuid/);
@@ -58,5 +62,17 @@ describe("database integrity schema", () => {
 
   it("stores when a message was read", () => {
     expect(schema).toMatch(/readAt\s+DateTime\?\s+@db\.Timestamptz\(3\)/);
+  });
+});
+
+describe("password reset token schema", () => {
+  it("keeps delivered links inactive until delivery is acknowledged", () => {
+    expect(schema).toMatch(/activatedAt\s+DateTime\?\s+@db\.Timestamptz\(3\)/);
+    expect(passwordResetMigration).toBeDefined();
+    const sql = readFileSync(
+      join(migrationsDirectory, passwordResetMigration!.name, "migration.sql"),
+      "utf8",
+    );
+    expect(sql).toContain('ADD COLUMN "activatedAt" TIMESTAMPTZ(3)');
   });
 });

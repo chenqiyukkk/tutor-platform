@@ -684,7 +684,10 @@ h3 {
 .auth-page__intro { max-width: 480px; color: var(--color-ink-soft); }
 .auth-form { display: grid; margin-top: var(--space-5); gap: var(--space-5); }
 .auth-form__error { padding: var(--space-3) var(--space-4); margin: 0; border-left: 3px solid var(--color-vermilion); background: var(--color-vermilion-wash); color: var(--color-vermilion-dark); font-weight: 700; }
+.auth-form__success { padding: var(--space-3) var(--space-4); margin: 0; border-left: 3px solid var(--color-forest); background: var(--color-forest-wash); color: var(--color-forest); font-weight: 700; }
 .auth-form__submit { width: 100%; margin-top: var(--space-2); }
+.auth-page__recovery { margin: var(--space-3) 0 0; text-align: right; }
+.auth-page__recovery a { color: var(--color-forest); font-weight: 800; text-decoration: underline; text-underline-offset: 4px; }
 .auth-page__switch { margin-top: var(--space-5); color: var(--color-ink-soft); }
 .auth-page__switch a { margin-left: var(--space-2); color: var(--color-forest); font-weight: 800; text-decoration: underline; text-underline-offset: 4px; }
 .auth-page__aside { display: grid; position: relative; min-height: 100%; padding: var(--space-7); overflow: hidden; background: var(--color-forest); color: var(--color-white); place-content: center; text-align: center; }

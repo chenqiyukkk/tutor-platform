@@ -31,6 +31,11 @@ export function AuthPage(props: AuthPageProps) {
         ) : (
           <AuthForm mode="register" role={role} />
         )}
+        {mode === "login" ? (
+          <p className="auth-page__recovery">
+            <Link href={`/${role}/forgot-password`}>忘记密码？</Link>
+          </p>
+        ) : null}
         {role !== "admin" ? (
           <p className="auth-page__switch">
             {registering ? "已有账户？" : "还没有账户？"}
