@@ -48,11 +48,11 @@ export default function HomePage() {
               在熟悉的生活圈里，把合适的人连接起来。
             </p>
             <div className="hero__actions" aria-label="选择使用身份">
-              <Link className="button button--primary" href="/parent">
+              <Link className="button button--primary" href="/parent/login">
                 我是家长
                 <span aria-hidden="true">→</span>
               </Link>
-              <Link className="button button--outline" href="/teacher">
+              <Link className="button button--outline" href="/teacher/login">
                 我是老师
                 <span aria-hidden="true">→</span>
               </Link>
@@ -109,7 +109,7 @@ export default function HomePage() {
                 <li>直接比较经历与授课方向</li>
                 <li>自主沟通，不收信息费</li>
               </ul>
-              <Link className="text-link" href="/parent">发布家教需求 <span aria-hidden="true">→</span></Link>
+              <Link className="text-link" href="/parent/login">发布家教需求 <span aria-hidden="true">→</span></Link>
             </Card>
             <Card className="role-card role-card--teacher" tactile>
               <span className="role-card__number" aria-hidden="true">02</span>
@@ -121,7 +121,7 @@ export default function HomePage() {
                 <li>筛选附近的真实需求</li>
                 <li>双方确认后再交换联系</li>
               </ul>
-              <Link className="text-link" href="/teacher">创建老师资料 <span aria-hidden="true">→</span></Link>
+              <Link className="text-link" href="/teacher/login">创建老师资料 <span aria-hidden="true">→</span></Link>
             </Card>
           </div>
         </div>
@@ -206,7 +206,7 @@ export default function HomePage() {
                   </div>
                 </article>
               ))}
-              <Link className="text-link" href="/parent">从家长入口查看更多 <span aria-hidden="true">→</span></Link>
+              <Link className="text-link" href="/parent/login">从家长入口查看更多 <span aria-hidden="true">→</span></Link>
             </section>
             <section className="preview-column preview-column--requests" aria-labelledby="requests-preview-title">
               <div className="preview-column__title">
@@ -223,7 +223,7 @@ export default function HomePage() {
                   <span>{request.schedule}</span>
                 </article>
               ))}
-              <Link className="text-link" href="/teacher">从老师入口查看更多 <span aria-hidden="true">→</span></Link>
+              <Link className="text-link" href="/teacher/login">从老师入口查看更多 <span aria-hidden="true">→</span></Link>
             </section>
           </div>
         </div>
@@ -236,8 +236,8 @@ export default function HomePage() {
             <h2 id="closing-title">把需求写清楚，把选择留给彼此</h2>
           </div>
           <div className="closing-cta__actions">
-            <Link className="button button--light" href="/parent">我是家长</Link>
-            <Link className="button button--ink" href="/teacher">我是老师</Link>
+            <Link className="button button--light" href="/parent/login">我是家长</Link>
+            <Link className="button button--ink" href="/teacher/login">我是老师</Link>
           </div>
         </div>
       </section>

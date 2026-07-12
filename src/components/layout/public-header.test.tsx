@@ -20,11 +20,11 @@ describe("PublicHeader", () => {
     ).toBeInTheDocument();
     expect(within(banner).getByRole("link", { name: "我是老师" })).toHaveAttribute(
       "href",
-      "/teacher",
+      "/teacher/login",
     );
     expect(within(banner).getByRole("link", { name: "我是家长" })).toHaveAttribute(
       "href",
-      "/parent",
+      "/parent/login",
     );
     expect(screen.getAllByRole("heading", { level: 1 })).toHaveLength(1);
   });

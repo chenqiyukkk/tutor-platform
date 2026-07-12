@@ -15,11 +15,11 @@ describe("HomePage", () => {
 
     expect(roleEntry.getByRole("link", { name: "我是老师" })).toHaveAttribute(
       "href",
-      "/teacher",
+      "/teacher/login",
     );
     expect(roleEntry.getByRole("link", { name: "我是家长" })).toHaveAttribute(
       "href",
-      "/parent",
+      "/parent/login",
     );
   });
 });

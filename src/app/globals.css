@@ -663,6 +663,50 @@ h3 {
 .toast__body strong { font-family: var(--font-display); }
 .toast__body p { margin: 0.15rem 0 0; color: var(--color-ink-soft); font-size: var(--text-sm); }
 
+.auth-page {
+  display: grid;
+  min-height: 100svh;
+  background: var(--color-paper-light);
+  grid-template-columns: minmax(0, 1.1fr) minmax(320px, 0.9fr);
+}
+
+.auth-page__panel {
+  display: flex;
+  width: min(100%, 620px);
+  padding: clamp(2rem, 7vw, 6rem);
+  justify-self: end;
+  flex-direction: column;
+  justify-content: center;
+}
+
+.auth-page__brand { width: fit-content; margin-bottom: var(--space-8); }
+.auth-page h1 { margin-bottom: var(--space-3); font-size: clamp(2.5rem, 5vw, 4.4rem); }
+.auth-page__intro { max-width: 480px; color: var(--color-ink-soft); }
+.auth-form { display: grid; margin-top: var(--space-5); gap: var(--space-5); }
+.auth-form__error { padding: var(--space-3) var(--space-4); margin: 0; border-left: 3px solid var(--color-vermilion); background: var(--color-vermilion-wash); color: var(--color-vermilion-dark); font-weight: 700; }
+.auth-form__submit { width: 100%; margin-top: var(--space-2); }
+.auth-page__switch { margin-top: var(--space-5); color: var(--color-ink-soft); }
+.auth-page__switch a { margin-left: var(--space-2); color: var(--color-forest); font-weight: 800; text-decoration: underline; text-underline-offset: 4px; }
+.auth-page__aside { display: grid; position: relative; min-height: 100%; padding: var(--space-7); overflow: hidden; background: var(--color-forest); color: var(--color-white); place-content: center; text-align: center; }
+.auth-page--parent .auth-page__aside { background: var(--color-vermilion); }
+.auth-page--admin .auth-page__aside { background: var(--color-ink); }
+.auth-page__aside::before,
+.auth-page__aside::after { position: absolute; width: 70%; aspect-ratio: 1; border: 1px solid rgb(255 253 247 / 20%); border-radius: 50%; content: ""; }
+.auth-page__aside::before { top: -20%; right: -20%; }
+.auth-page__aside::after { bottom: -25%; left: -25%; }
+.auth-page__aside > span { position: relative; font-family: var(--font-display); font-size: clamp(8rem, 20vw, 16rem); font-weight: 800; line-height: 0.8; opacity: 0.13; }
+.auth-page__aside p { position: relative; margin: var(--space-6) 0 0; font-family: var(--font-display); font-size: var(--text-xl); letter-spacing: 0.08em; }
+
+.dashboard-shell { min-height: 100svh; padding: var(--space-6); background: var(--color-paper); }
+.dashboard-header { display: flex; max-width: 1100px; margin-inline: auto; align-items: center; justify-content: space-between; gap: var(--space-5); }
+.dashboard-card { max-width: 780px; padding: clamp(2rem, 6vw, 5rem); margin: var(--space-8) auto 0; border: 1px solid var(--color-line-dark); background: var(--color-paper-light); box-shadow: var(--shadow-paper); }
+.dashboard-card h1 { font-size: var(--text-2xl); }
+.dashboard-card > p:not(.eyebrow) { color: var(--color-ink-soft); }
+.dashboard-card dl { display: grid; margin-block: var(--space-6); border-top: var(--border-hairline); }
+.dashboard-card dl div { display: grid; padding-block: var(--space-3); border-bottom: var(--border-hairline); gap: var(--space-4); grid-template-columns: 120px 1fr; }
+.dashboard-card dt { color: var(--color-ink-soft); }
+.dashboard-card dd { margin: 0; font-weight: 700; }
+
 @media (max-width: 960px) {
   .section-pad { padding-block: var(--space-8); }
   .hero { min-height: auto; }
@@ -696,6 +740,9 @@ h3 {
   .promise__stamp { width: 76px; height: 76px; font-size: 3rem; }
   .public-footer__grid { grid-template-columns: 1fr 1fr; }
   .public-footer__legal { grid-column: 1 / -1; text-align: left; }
+  .auth-page { grid-template-columns: 1fr; }
+  .auth-page__panel { width: min(100%, 620px); justify-self: center; }
+  .auth-page__aside { display: none; }
 }
 
 @media (max-width: 520px) {

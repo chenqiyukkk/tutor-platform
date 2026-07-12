@@ -18,10 +18,10 @@ export function PublicHeader() {
             <Link className="header-link" href="#safety">
               安全保障
             </Link>
-            <Link className="header-cta header-cta--teacher" href="/teacher">
+            <Link className="header-cta header-cta--teacher" href="/teacher/login">
               我是老师
             </Link>
-            <Link className="header-cta header-cta--parent" href="/parent">
+            <Link className="header-cta header-cta--parent" href="/parent/login">
               我是家长
             </Link>
           </nav>
