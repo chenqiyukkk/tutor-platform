@@ -4,6 +4,8 @@ node_modules/
 out/
 coverage/
 *.tsbuildinfo
+prisma/*.db
+prisma/*.db-journal
 .env*
 !.env.example
 npm-debug.log*
