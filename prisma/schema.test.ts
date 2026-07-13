@@ -110,3 +110,21 @@ describe("teacher profile schema", () => {
     expect(teacherMigration).toBeDefined();
   });
 });
+
+describe("favorite list sorting index", () => {
+  it("supports owner-scoped keyset pagination in stable display order", () => {
+    expect(schema).toMatch(/@@index\(\[ownerAccountId, createdAt\(sort: Desc\), id\]\)/);
+
+    const favoriteMigration = readdirSync(migrationsDirectory, { withFileTypes: true }).find(
+      (entry) => entry.isDirectory() && entry.name.endsWith("_favorite_list_sort_index"),
+    );
+    expect(favoriteMigration).toBeDefined();
+    const sql = readFileSync(
+      join(migrationsDirectory, favoriteMigration!.name, "migration.sql"),
+      "utf8",
+    );
+    expect(sql).toContain(
+      'CREATE INDEX "Favorite_ownerAccountId_createdAt_id_idx" ON "Favorite"("ownerAccountId", "createdAt" DESC, "id")',
+    );
+  });
+});

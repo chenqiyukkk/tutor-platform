@@ -1,4 +1,4 @@
-import { interactionHandlers } from "@/features/greetings/server";
+import { favoriteHandlers } from "@/features/favorites/server";
 
 export const dynamic = "force-dynamic";
-export const { GET, POST, DELETE } = interactionHandlers.favorites;
+export const { GET, POST, DELETE } = favoriteHandlers;

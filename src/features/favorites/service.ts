@@ -5,8 +5,18 @@ import { z } from "zod";
 
 import type { AuthenticatedAccount } from "@/features/auth/service";
 
+import { decodeFavoriteCursor, encodeFavoriteCursor, favoriteListQuerySchema } from "./schema";
+
 type Actor = Pick<AuthenticatedAccount, "id" | "role">;
 type Db = PrismaClient | Prisma.TransactionClient;
+type FavoriteListItem = {
+  id: string;
+  targetType: "teacher" | "request";
+  targetId: string;
+  label: string;
+  summary: string | null;
+  createdAt: string;
+};
 
 export const favoriteTargetSchema = z.object({
   targetType: z.enum(["teacher", "request"]),
@@ -153,21 +163,74 @@ export function createFavoriteService(prisma: PrismaClient, now: () => Date = ()
       } });
     },
 
-    async list(actor: Actor) {
+    async list(actor: Actor, rawQuery: unknown = {}) {
       await assertActor(actor);
-      const favorites = await prisma.favorite.findMany({ where: { ownerAccountId: actor.id }, select: { id: true, teacherProfileId: true, tutoringRequestId: true, createdAt: true }, orderBy: [{ createdAt: "desc" }, { id: "asc" }] });
-      const result = [];
-      for (const favorite of favorites) {
-        if (actor.role === "parent" && favorite.teacherProfileId) {
-          const target = await prisma.teacherProfile.findFirst({ where: { AND: [{ id: favorite.teacherProfileId }, teacherPublicWhere] }, select: { id: true, displayName: true, headline: true } });
-          if (target) result.push({ id: favorite.id, targetType: "teacher" as const, targetId: target.id, label: target.displayName, summary: target.headline, createdAt: favorite.createdAt.toISOString() });
-        }
-        if (actor.role === "teacher" && favorite.tutoringRequestId) {
-          const target = await prisma.tutoringRequest.findFirst({ where: { AND: [{ id: favorite.tutoringRequestId }, requestPublicWhere(now())] }, select: { id: true, title: true } });
-          if (target) result.push({ id: favorite.id, targetType: "request" as const, targetId: target.id, label: target.title, summary: null, createdAt: favorite.createdAt.toISOString() });
-        }
+      const query = favoriteListQuerySchema.parse(rawQuery);
+      const cursor = query.cursor ? decodeFavoriteCursor(query.cursor) : null;
+      const where: Prisma.FavoriteWhereInput = {
+        ownerAccountId: actor.id,
+        ...(actor.role === "parent"
+          ? { teacherProfileId: { not: null } }
+          : { tutoringRequestId: { not: null } }),
+        ...(cursor ? { OR: [
+          { createdAt: { lt: cursor.createdAt } },
+          { createdAt: cursor.createdAt, id: { gt: cursor.id } },
+        ] } : {}),
+      };
+      const rows = await prisma.favorite.findMany({
+        where,
+        select: { id: true, teacherProfileId: true, tutoringRequestId: true, createdAt: true },
+        orderBy: [{ createdAt: "desc" }, { id: "asc" }],
+        take: query.pageSize + 1,
+      });
+      const hasMore = rows.length > query.pageSize;
+      const pageRows = hasMore ? rows.slice(0, query.pageSize) : rows;
+      const boundary = hasMore ? pageRows.at(-1) : undefined;
+
+      let items: FavoriteListItem[];
+      if (actor.role === "parent") {
+        const targetIds = pageRows.flatMap(({ teacherProfileId }) => teacherProfileId ? [teacherProfileId] : []);
+        const targets = await prisma.teacherProfile.findMany({
+          where: { AND: [{ id: { in: targetIds } }, teacherPublicWhere] },
+          select: { id: true, displayName: true, headline: true },
+        });
+        const byId = new Map(targets.map((target) => [target.id, target]));
+        items = pageRows.flatMap((favorite) => {
+          const target = favorite.teacherProfileId ? byId.get(favorite.teacherProfileId) : undefined;
+          return target ? [{
+            id: favorite.id,
+            targetType: "teacher",
+            targetId: target.id,
+            label: target.displayName,
+            summary: target.headline,
+            createdAt: favorite.createdAt.toISOString(),
+          }] : [];
+        });
+      } else {
+        const targetIds = pageRows.flatMap(({ tutoringRequestId }) => tutoringRequestId ? [tutoringRequestId] : []);
+        const targets = await prisma.tutoringRequest.findMany({
+          where: { AND: [{ id: { in: targetIds } }, requestPublicWhere(now())] },
+          select: { id: true, title: true },
+        });
+        const byId = new Map(targets.map((target) => [target.id, target]));
+        items = pageRows.flatMap((favorite) => {
+          const target = favorite.tutoringRequestId ? byId.get(favorite.tutoringRequestId) : undefined;
+          return target ? [{
+            id: favorite.id,
+            targetType: "request",
+            targetId: target.id,
+            label: target.title,
+            summary: null,
+            createdAt: favorite.createdAt.toISOString(),
+          }] : [];
+        });
       }
-      return result;
+
+      return {
+        items,
+        pageSize: query.pageSize,
+        nextCursor: boundary ? encodeFavoriteCursor({ createdAt: boundary.createdAt, id: boundary.id }) : null,
+      };
     },
   };
 }

@@ -334,6 +334,7 @@ model Favorite {
   @@unique([ownerAccountId, tutoringRequestId])
   @@index([teacherProfileId])
   @@index([tutoringRequestId])
+  @@index([ownerAccountId, createdAt(sort: Desc), id])
 }
 
 model Greeting {

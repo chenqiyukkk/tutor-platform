@@ -120,6 +120,66 @@ describe("favorites against PostgreSQL", () => {
       { teacherProfileId: null, tutoringRequestId: null },
     ] } })).resolves.toBe(0);
   });
+
+  it("walks more than 50 favorites with stable keyset cursors while newer rows arrive", async () => {
+    const pagingParent = await prisma.account.create({ data: {
+      role: "PARENT", username: `fav-paging-${marker}`, normalizedUsername: `fav-paging-${marker}`,
+      email: `fav-paging-${marker}@example.test`, normalizedEmail: `fav-paging-${marker}@example.test`, passwordHash: "test",
+    } });
+    accountIds.push(pagingParent.id);
+    const targets = Array.from({ length: 56 }, (_, index) => ({
+      accountId: crypto.randomUUID(),
+      profileId: crypto.randomUUID(),
+      index,
+    }));
+    accountIds.push(...targets.map(({ accountId }) => accountId));
+    await prisma.account.createMany({ data: targets.map(({ accountId, index }) => ({
+      id: accountId, role: "TEACHER", username: `fav-page-t-${index}-${marker}`,
+      normalizedUsername: `fav-page-t-${index}-${marker}`, email: `fav-page-t-${index}-${marker}@example.test`,
+      normalizedEmail: `fav-page-t-${index}-${marker}@example.test`, passwordHash: "test",
+    })) });
+    await prisma.teacherProfile.createMany({ data: targets.map(({ accountId, profileId, index }) => ({
+      id: profileId, accountId, displayName: `分页老师${index}`, identityType: "FULL_TIME_TEACHER",
+      headline: `分页摘要${index}`, bio: "分页公开自述", yearsExperience: 2, hourlyRate: 80,
+      hourlyRateMax: 100, status: "PUBLISHED", publishedAt: new Date("2026-07-01T00:00:00.000Z"),
+    })) });
+    await prisma.teacherSubject.createMany({ data: targets.map(({ profileId }) => ({
+      teacherProfileId: profileId, subjectId: subjectIds[0],
+    })) });
+    await prisma.teacherServiceArea.createMany({ data: targets.map(({ profileId }) => ({
+      teacherProfileId: profileId, regionId: regionIds[0], isPrimary: true,
+    })) });
+
+    const rows = targets.slice(0, 55).map(({ profileId, index }) => ({
+      id: crypto.randomUUID(), ownerAccountId: pagingParent.id, teacherProfileId: profileId,
+      createdAt: new Date(`2026-07-${String(1 + Math.floor(index / 5)).padStart(2, "0")}T12:00:00.000Z`),
+    }));
+    await prisma.favorite.createMany({ data: rows });
+    const expected = rows
+      .toSorted((left, right) => right.createdAt.getTime() - left.createdAt.getTime() || left.id.localeCompare(right.id))
+      .map(({ id }) => id);
+    const service = createFavoriteService(prisma);
+    const collected: string[] = [];
+    let page = await service.list({ id: pagingParent.id, role: "parent" }, { pageSize: 20 });
+    collected.push(...page.items.map(({ id }) => id));
+    expect(page.nextCursor).toEqual(expect.any(String));
+
+    const late = await prisma.favorite.create({ data: {
+      ownerAccountId: pagingParent.id, teacherProfileId: targets[55].profileId,
+      createdAt: new Date("2026-08-01T00:00:00.000Z"),
+    } });
+    while (page.nextCursor) {
+      page = await service.list(
+        { id: pagingParent.id, role: "parent" },
+        { pageSize: 20, cursor: page.nextCursor },
+      );
+      collected.push(...page.items.map(({ id }) => id));
+    }
+
+    expect(collected).toEqual(expected);
+    expect(new Set(collected).size).toBe(55);
+    expect(collected).not.toContain(late.id);
+  });
 });
 
 const DAY = 24 * 60 * 60 * 1000;
