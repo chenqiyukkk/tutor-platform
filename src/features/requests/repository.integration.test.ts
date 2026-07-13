@@ -99,6 +99,22 @@ describe("Prisma parent request repository", () => {
     await expect(repository.findRequest(caller.id, closed.id)).resolves.toMatchObject({ status: "CLOSED", publishedAt: null, closedAt: closedResult.closedAt });
   });
 
+  it("atomically rejects an unsafe alias update linked to a published request", async () => {
+    const { caller, student, input } = await requestFixture("unsafe-alias-update");
+    const published = await service.createDraft(caller, input);
+    await service.publish(caller, published.id);
+
+    await expect(repository.updateStudent(caller.id, student.id, {
+      publicAlias: "LINE ID tutor88",
+      grade: student.grade,
+      notes: student.notes,
+    })).rejects.toMatchObject({ code: "INVALID_INPUT" });
+    await expect(prisma.studentProfile.findUniqueOrThrow({ where: { id: student.id } }))
+      .resolves.toMatchObject({ displayName: student.publicAlias });
+    await expect(repository.findRequest(caller.id, published.id))
+      .resolves.toMatchObject({ status: "PUBLISHED" });
+  });
+
   it("serializes publish with student deactivation so no published request can reference an inactive student", async () => {
     const { caller, student, input } = await requestFixture("race");
     const draft = await service.createDraft(caller, input);

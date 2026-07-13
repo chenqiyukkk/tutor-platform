@@ -1,6 +1,7 @@
 import "server-only";
 
 import { Prisma, type PrismaClient } from "@prisma/client";
+import { contactPolicyMessage, violatesContactPolicy } from "@/features/safety/contact-policy";
 
 import {
   RequestWorkflowError,
@@ -42,6 +43,12 @@ function toRequest(row: RequestRow): TutoringRequest {
     subjects: row.subjects.map(({ subject }) => ({ id: subject.id, name: subject.name, isActive: subject.isActive })).sort((a, b) => a.name.localeCompare(b.name, "zh-CN")),
     region: row.region ? { id: row.region.id, name: row.region.name, level: row.region.level, isActive: row.region.isActive } : null,
   };
+}
+
+function assertSafeStudentAlias(publicAlias: string) {
+  if (violatesContactPolicy(publicAlias)) {
+    throw new RequestWorkflowError("INVALID_INPUT", "提交内容校验失败", { publicAlias: [contactPolicyMessage] });
+  }
 }
 
 async function parentProfile(client: Client, accountId: string) {
@@ -118,6 +125,7 @@ export class PrismaRequestRepository implements RequestRepository {
   }
 
   async createStudent(accountId: string, input: Omit<Student, "id" | "isActive">) {
+    assertSafeStudentAlias(input.publicAlias);
     return this.prisma.$transaction(async (transaction) => {
       const parent = await parentProfile(transaction, accountId);
       return toStudent(await transaction.studentProfile.create({ data: { parentProfileId: parent.id, displayName: input.publicAlias, gradeLevel: input.grade, notes: input.notes } }));
@@ -125,9 +133,30 @@ export class PrismaRequestRepository implements RequestRepository {
   }
 
   async updateStudent(accountId: string, id: string, input: Omit<Student, "id" | "isActive">) {
-    const row = await this.prisma.studentProfile.findFirst({ where: { id, parentProfile: { accountId }, isActive: true }, select: { id: true } });
-    if (!row) throw new RequestWorkflowError("NOT_FOUND", "学生档案不存在");
-    return toStudent(await this.prisma.studentProfile.update({ where: { id }, data: { displayName: input.publicAlias, gradeLevel: input.grade, notes: input.notes } }));
+    return this.prisma.$transaction(async (transaction) => {
+      await transaction.$queryRaw`
+        SELECT request."id" FROM "TutoringRequest" request
+        WHERE request."studentProfileId" = ${id}::uuid
+        ORDER BY request."id" FOR UPDATE
+      `;
+      await transaction.$queryRaw`SELECT "id" FROM "StudentProfile" WHERE "id" = ${id}::uuid FOR UPDATE`;
+      const row = await transaction.studentProfile.findFirst({
+        where: { id, parentProfile: { accountId }, isActive: true },
+        select: { parentProfileId: true },
+      });
+      if (!row) throw new RequestWorkflowError("NOT_FOUND", "学生档案不存在");
+      await transaction.$queryRaw`SELECT "id" FROM "ParentProfile" WHERE "id" = ${row.parentProfileId}::uuid FOR SHARE`;
+      const current = await transaction.studentProfile.findFirst({
+        where: { id, parentProfile: { accountId }, isActive: true },
+        select: { id: true },
+      });
+      if (!current) throw new RequestWorkflowError("NOT_FOUND", "学生档案不存在");
+      assertSafeStudentAlias(input.publicAlias);
+      return toStudent(await transaction.studentProfile.update({
+        where: { id },
+        data: { displayName: input.publicAlias, gradeLevel: input.grade, notes: input.notes },
+      }));
+    });
   }
 
   async deactivateStudent(accountId: string, id: string) {

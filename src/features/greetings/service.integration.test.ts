@@ -61,9 +61,11 @@ describe("greeting workflow against PostgreSQL", () => {
     if (invalidation === "profile-missing") await prisma.teacherProfile.delete({ where: { id: scenario.teacherProfile.id } });
     if (invalidation === "profile-unpublished") await prisma.teacherProfile.update({ where: { id: scenario.teacherProfile.id }, data: { status: "DRAFT", publishedAt: null } });
     if (invalidation === "profile-headline-missing") await prisma.teacherProfile.update({ where: { id: scenario.teacherProfile.id }, data: { headline: null } });
+    if (invalidation === "profile-headline-unsafe") await prisma.teacherProfile.update({ where: { id: scenario.teacherProfile.id }, data: { headline: "Signal: tutor88" } });
     if (invalidation === "request-unpublished") await prisma.tutoringRequest.update({ where: { id: scenario.request.id }, data: { status: "DRAFT", publishedAt: null } });
     if (invalidation === "request-mode-missing") await prisma.tutoringRequest.update({ where: { id: scenario.request.id }, data: { teachingMode: null } });
     if (invalidation === "student-inactive") await prisma.studentProfile.update({ where: { id: scenario.student.id }, data: { isActive: false } });
+    if (invalidation === "student-alias-unsafe") await prisma.studentProfile.update({ where: { id: scenario.student.id }, data: { displayName: "抖音号 tutor88" } });
     if (invalidation === "subject-inactive") await prisma.subject.update({ where: { id: scenario.subject.id }, data: { isActive: false } });
     if (invalidation === "region-inactive") await prisma.region.update({ where: { id: scenario.region.id }, data: { isActive: false } });
     if (invalidation === "sender-account-disabled") await prisma.account.update({ where: { id: scenario.teacher.id }, data: { status: "DISABLED" } });
@@ -658,7 +660,7 @@ describe("greeting workflow against PostgreSQL", () => {
 
 const DAY = 24 * 60 * 60 * 1000;
 const INVALIDATIONS = [
-  "profile-missing", "profile-unpublished", "profile-headline-missing", "request-unpublished", "request-mode-missing", "student-inactive",
+  "profile-missing", "profile-unpublished", "profile-headline-missing", "profile-headline-unsafe", "request-unpublished", "request-mode-missing", "student-inactive", "student-alias-unsafe",
   "subject-inactive", "region-inactive", "sender-account-disabled",
 ] as const;
 type Invalidation = typeof INVALIDATIONS[number];

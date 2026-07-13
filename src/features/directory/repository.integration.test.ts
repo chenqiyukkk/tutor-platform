@@ -26,6 +26,7 @@ describe("Prisma public directory repository", () => {
   const regionIds: string[] = [];
   let visibleTeacherId = "";
   let visibleRequestId = "";
+  let visibleStudentId = "";
   let activeSubjectId = "";
   let activeRegionId = "";
   let canonicalAdjacentPair: [string, string] = ["", ""];
@@ -148,6 +149,7 @@ describe("Prisma public directory repository", () => {
       gradeLevel: "GRADE_8",
       notes: "不可公开的学生诊断记录",
     } });
+    visibleStudentId = student.id;
     const visibleRequest = await prisma.tutoringRequest.create({ data: {
       parentProfileId: parentProfile.id,
       studentProfileId: student.id,
@@ -319,6 +321,24 @@ describe("Prisma public directory repository", () => {
     });
     await expect(repository.getRequestPreview(expiredRequestId)).resolves.toBeNull();
     await expect(repository.getRequestDetail(expiredRequestId)).resolves.toBeNull();
+  });
+
+  it("defends public reads from incomplete or contact-bearing persisted content", async () => {
+    for (const headline of [null, "", "   "]) {
+      await prisma.teacherProfile.update({ where: { id: visibleTeacherId }, data: { headline } });
+      await expect(repository.getTeacherPreview(visibleTeacherId)).resolves.toBeNull();
+      expect((await repository.listTeachers({ page: 1, pageSize: 12 })).items.map(({ id }) => id))
+        .not.toContain(visibleTeacherId);
+    }
+    await prisma.teacherProfile.update({ where: { id: visibleTeacherId }, data: { headline: "Signal: tutor88" } });
+    await expect(repository.getTeacherDetail(visibleTeacherId)).resolves.toBeNull();
+    await prisma.teacherProfile.update({ where: { id: visibleTeacherId }, data: { headline: "把几何讲成方法" } });
+
+    await prisma.studentProfile.update({ where: { id: visibleStudentId }, data: { displayName: "抖音号 tutor88" } });
+    await expect(repository.getRequestPreview(visibleRequestId)).resolves.toBeNull();
+    expect((await repository.listRequests({ page: 1, pageSize: 12 })).items.map(({ id }) => id))
+      .not.toContain(visibleRequestId);
+    await prisma.studentProfile.update({ where: { id: visibleStudentId }, data: { displayName: "小树" } });
   });
 
   it("rejects invalid, repeated, and unknown API queries before a real repository call", async () => {

@@ -188,6 +188,7 @@ function assertActor(role: string): asserts role is "parent" | "teacher" {
 }
 
 function assertPublicTeacher(profile: TeacherContext) {
+  const publicTextSafe = ![profile.displayName, profile.headline, profile.bio].some(violatesContactPolicy);
   const valid = profile.account.role === "TEACHER"
     && profile.account.status === "ACTIVE"
     && profile.status === "PUBLISHED"
@@ -203,11 +204,19 @@ function assertPublicTeacher(profile: TeacherContext) {
     && profile.subjects.length > 0
     && profile.subjects.every(({ subject }) => subject.isActive)
     && profile.serviceAreas.some(({ isPrimary }) => isPrimary)
-    && profile.serviceAreas.every(({ region }) => region.isActive && region.level === 3);
+    && profile.serviceAreas.every(({ region }) => region.isActive && region.level === 3)
+    && publicTextSafe;
   if (!valid) throw new GreetingWorkflowError("INVALID_TARGET", "老师资料当前不可联系");
 }
 
 function assertPublicRequest(request: RequestContext, now: Date) {
+  const publicTextSafe = ![
+    request.title,
+    request.description,
+    request.scheduleText,
+    request.publicLocationNote,
+    request.studentProfile?.displayName,
+  ].some(violatesContactPolicy);
   const valid = request.parentProfile.account.role === "PARENT"
     && request.parentProfile.account.status === "ACTIVE"
     && request.status === "PUBLISHED"
@@ -220,7 +229,8 @@ function assertPublicRequest(request: RequestContext, now: Date) {
     && request.region.level === 3
     && request.subjects.length > 0
     && request.subjects.every(({ subject }) => subject.isActive)
-    && (request.expiresAt === null || request.expiresAt.getTime() > now.getTime());
+    && (request.expiresAt === null || request.expiresAt.getTime() > now.getTime())
+    && publicTextSafe;
   if (!valid) throw new GreetingWorkflowError("INVALID_TARGET", "家教需求当前不可联系");
 }
 

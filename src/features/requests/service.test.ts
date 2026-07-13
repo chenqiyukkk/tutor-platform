@@ -93,6 +93,20 @@ function setup(initial = request()) {
 }
 
 describe("parent request service", () => {
+  it("applies the contact policy to student aliases on both create and update", async () => {
+    const { service } = setup();
+    const input = { publicAlias: "小红书号 red123", grade: "GRADE_8" as const, notes: "" };
+
+    await expect(service.createStudent(parentA, input)).rejects.toMatchObject({
+      code: "INVALID_INPUT",
+      fieldErrors: { publicAlias: ["请勿填写联系方式、外部链接或付费引导"] },
+    });
+    await expect(service.updateStudent(parentA, ids.student, input)).rejects.toMatchObject({
+      code: "INVALID_INPUT",
+      fieldErrors: { publicAlias: ["请勿填写联系方式、外部链接或付费引导"] },
+    });
+  });
+
   it("creates an incomplete draft while validating every supplied value", async () => {
     const { service } = setup();
     await expect(service.createDraft(parentA, {})).resolves.toMatchObject({ status: "DRAFT" });

@@ -128,3 +128,20 @@ describe("favorite list sorting index", () => {
     );
   });
 });
+
+describe("public content safety migration", () => {
+  it("demotes legacy unsafe public records in a new forward-only migration", () => {
+    const safetyMigration = readdirSync(migrationsDirectory, { withFileTypes: true }).find(
+      (entry) => entry.isDirectory() && entry.name === "20260713133400_public_content_safety",
+    );
+    expect(safetyMigration).toBeDefined();
+    if (!safetyMigration) return;
+    const sql = readFileSync(join(migrationsDirectory, safetyMigration.name, "migration.sql"), "utf8");
+    expect(sql).toContain('UPDATE "TeacherProfile"');
+    expect(sql).toContain('UPDATE "TutoringRequest"');
+    expect(sql).toContain('"status" = \'DRAFT\'');
+    expect(sql).toContain('"publishedAt" = NULL');
+    expect(sql).toContain('btrim("headline") = \'\'');
+    expect(sql).toContain('"StudentProfile"');
+  });
+});

@@ -1,5 +1,5 @@
 import { z } from "zod";
-import { violatesContactPolicy } from "@/features/safety/contact-policy";
+import { contactPolicyMessage, violatesContactPolicy } from "@/features/safety/contact-policy";
 
 export const teachingModes = ["OFFLINE", "ONLINE", "BOTH"] as const;
 export const grades = [
@@ -15,7 +15,8 @@ const exactSchoolPoint = /学校.{0,8}(?:正门|东门|西门|南门|北门|校�
 const formattedPhone = /(?:1[3-9](?:[\s-]*\d){9}|0\d{2,3}[\s-]\d{7,8})/;
 
 export const studentInputSchema = z.object({
-  publicAlias: z.string().trim().min(2, "学习昵称至少 2 个字符").max(30, "学习昵称不能超过 30 个字符"),
+  publicAlias: z.string().trim().min(2, "学习昵称至少 2 个字符").max(30, "学习昵称不能超过 30 个字符")
+    .refine((value) => !violatesContactPolicy(value), contactPolicyMessage),
   grade: z.enum(grades, "请选择有效年级"),
   notes: optionalText(500, "学习备注不能超过 500 个字符"),
 }).strict();

@@ -58,6 +58,20 @@ describe("favorites against PostgreSQL", () => {
     await service.remove({ id: parentId, role: "parent" }, { targetType: "teacher", targetId: profileId });
   });
 
+  it("does not expose a published teacher whose headline is missing", async () => {
+    const service = createFavoriteService(prisma);
+    await prisma.teacherProfile.update({ where: { id: profileId }, data: { headline: null } });
+    try {
+      await expect(service.add(
+        { id: parentId, role: "parent" },
+        { targetType: "teacher", targetId: profileId },
+      )).rejects.toMatchObject({ code: "INVALID_TARGET" });
+    } finally {
+      await prisma.favorite.deleteMany({ where: { ownerAccountId: parentId, teacherProfileId: profileId } });
+      await prisma.teacherProfile.update({ where: { id: profileId }, data: { headline: "公开老师" } });
+    }
+  });
+
   it.each(["target", "subject", "region", "target-account", "actor-account"] as const)(
     "does not save a teacher favorite when %s is concurrently deactivated",
     async (kind) => {
@@ -119,6 +133,39 @@ describe("favorites against PostgreSQL", () => {
       { teacherProfileId: profileId, tutoringRequestId: requestId },
       { teacherProfileId: null, tutoringRequestId: null },
     ] } })).resolves.toBe(0);
+  });
+
+  it("filters stale role-associated targets before applying the initial page limit", async () => {
+    const staleAccount = await prisma.account.create({ data: {
+      role: "TEACHER",
+      username: `fav-stale-${marker}`,
+      normalizedUsername: `fav-stale-${marker}`,
+      email: `fav-stale-${marker}@example.test`,
+      normalizedEmail: `fav-stale-${marker}@example.test`,
+      passwordHash: "test",
+    } });
+    accountIds.push(staleAccount.id);
+    const staleProfile = await prisma.teacherProfile.create({ data: {
+      accountId: staleAccount.id,
+      displayName: "已下架老师",
+      status: "DRAFT",
+    } });
+    await prisma.favorite.deleteMany({ where: { ownerAccountId: parentId } });
+    await prisma.favorite.createMany({ data: [
+      { ownerAccountId: parentId, teacherProfileId: staleProfile.id, createdAt: new Date("2026-07-03T00:00:00.000Z") },
+      { ownerAccountId: parentId, teacherProfileId: profileId, createdAt: new Date("2026-07-02T00:00:00.000Z") },
+    ] });
+    try {
+      const page = await createFavoriteService(prisma).list(
+        { id: parentId, role: "parent" },
+        { pageSize: 1 },
+      );
+      expect(page.items).toHaveLength(1);
+      expect(page.items[0]).toMatchObject({ targetId: profileId });
+      expect(page.nextCursor).toBeNull();
+    } finally {
+      await prisma.favorite.deleteMany({ where: { ownerAccountId: parentId } });
+    }
   });
 
   it("walks more than 50 favorites with stable keyset cursors while newer rows arrive", async () => {
