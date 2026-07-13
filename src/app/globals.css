@@ -1201,9 +1201,16 @@ h3 {
 .chat-thread__header h2 { margin: 0; font-size: var(--text-xl); }
 .chat-thread__header div > p:last-child { margin: var(--space-1) 0 0; color: var(--color-ink-soft); font-size: var(--text-sm); }
 .chat-thread__header .eyebrow { margin-bottom: var(--space-1); }
+.chat-thread__header > div:last-child { display: grid; justify-items: end; gap: var(--space-2); }
 .chat-thread__privacy { padding: .3rem .65rem; border: 1px solid var(--color-forest); color: var(--color-forest); font-size: var(--text-xs); font-weight: 900; letter-spacing: .08em; }
+.chat-thread__header .text-button[aria-disabled="true"] { cursor: default; opacity: .62; }
 .chat-thread__back { display: none; min-height: 44px; padding: 0; border: 0; background: transparent; color: var(--color-vermilion-dark); font-weight: 800; cursor: pointer; }
 .chat-thread__paper { min-height: 0; padding: var(--space-5); overflow-y: auto; overscroll-behavior: contain; }
+.chat-block-dialog { position: fixed; z-index: 50; inset: 0; display: grid; padding: var(--space-4); background: rgb(24 37 31 / 48%); place-items: center; }
+.chat-block-dialog form { display: grid; width: min(520px, 100%); padding: var(--space-6); border: 1px solid var(--color-line-dark); background: var(--color-paper-light); box-shadow: var(--shadow-paper); gap: var(--space-4); }
+.chat-block-dialog h2, .chat-block-dialog p { margin: 0; }
+.chat-block-dialog label { display: grid; color: var(--color-ink); font-weight: 800; gap: var(--space-2); }
+.chat-block-dialog textarea { width: 100%; padding: var(--space-3); border: 1px solid var(--color-line-dark); background: var(--color-white); color: var(--color-ink); resize: vertical; }
 .chat-load-older { display: block; min-height: 44px; padding-inline: var(--space-4); margin: 0 auto var(--space-4); border: 1px solid var(--color-line-dark); background: transparent; color: var(--color-forest); font-size: var(--text-sm); font-weight: 800; cursor: pointer; }
 .chat-load-older:disabled { cursor: wait; opacity: .55; }
 .chat-thread__notice, .chat-thread__empty { display: grid; min-height: 320px; place-content: center; text-align: center; }

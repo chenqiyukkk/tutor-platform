@@ -27,7 +27,7 @@ describe("GreetingCard", () => {
         region: { id: crypto.randomUUID(), name: "朝阳区" },
         subjects: [{ id: crypto.randomUUID(), name: "数学" }],
       },
-    } }} onAction={vi.fn()} />);
+    } }} onAction={vi.fn()} realm="parent" />);
 
     for (const value of ["林老师", "把数学讲清楚", "5 年经验", "已认证", "数学", "朝阳区", "周末下午", "线上 / 线下均可", "¥80–¥120/小时"]) {
       expect(screen.getAllByText(value).length).toBeGreaterThan(0);
@@ -40,8 +40,19 @@ describe("GreetingCard", () => {
     [{ unexpected: { evidence: "private-file-path" } }, "资料快照暂不可读"],
     [null, "资料快照暂不可读"],
   ])("gracefully renders legacy or unknown snapshots", (card, expected) => {
-    render(<GreetingCard item={{ ...baseItem, card }} onAction={vi.fn()} />);
+    render(<GreetingCard item={{ ...baseItem, card }} onAction={vi.fn()} realm="parent" />);
     expect(screen.getByText(expected)).toBeInTheDocument();
     expect(screen.queryByText("private-file-path")).not.toBeInTheDocument();
+  });
+
+  it.each(["parent", "teacher"] as const)("links accepted cards to the %s in-app conversation entry", (realm) => {
+    render(<GreetingCard
+      item={{ ...baseItem, status: "ACCEPTED", card: { legacy: true } }}
+      onAction={vi.fn()}
+      realm={realm}
+    />);
+
+    expect(screen.queryByText(/下一阶段开放/u)).not.toBeInTheDocument();
+    expect(screen.getByRole("link", { name: "前往站内消息" })).toHaveAttribute("href", `/${realm}/messages`);
   });
 });

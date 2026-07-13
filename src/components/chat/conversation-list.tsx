@@ -50,6 +50,7 @@ export function ConversationList({
                 <button
                   aria-current={selectedId === conversation.id ? "true" : undefined}
                   aria-label={`${conversation.counterpart.displayName}，${conversation.request.title}${unread ? `，${unread}` : ""}`}
+                  data-conversation-id={conversation.id}
                   onClick={() => onSelect(conversation.id)}
                   type="button"
                 >

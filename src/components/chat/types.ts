@@ -7,6 +7,7 @@ export type ConversationItem = {
   activityAt: string;
   lastMessageAt: string | null;
   unreadCount: number;
+  blocked: boolean;
 };
 
 export type ChatMessage = {
@@ -15,6 +16,9 @@ export type ChatMessage = {
   body: string;
   sentAt: string;
   readAt: string | null;
+  editedAt: string | null;
+  deletedAt: string | null;
+  updatedAt: string;
   mine: boolean;
 };
 
@@ -33,5 +37,6 @@ export type MessagePage = {
   limit: number;
   nextBeforeCursor: string | null;
   nextAfterCursor: string | null;
+  nextChangesCursor: string | null;
   hasMore: boolean;
 };

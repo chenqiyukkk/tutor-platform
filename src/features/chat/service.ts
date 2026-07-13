@@ -28,7 +28,6 @@ import {
   queryConversationContext,
   safeMessageSelect,
   toMessageDto,
-  type ChatMessageDto,
   type ConversationContext,
 } from "./data";
 

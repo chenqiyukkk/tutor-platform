@@ -83,3 +83,12 @@
 
 - RED：`.\node_modules\.bin\vitest.cmd run src/components/chat/chat-workspace.test.tsx -t "backs failed polls off" --reporter=verbose`，第二个精确时间点期望 2 次调用、实际只有 1 次，证明第一次失败后等待了 4 秒。
 - GREEN：`.\node_modules\.bin\vitest.cmd run src/components/chat/chat-workspace.test.tsx -t "polls only while visible|backs failed polls off" --reporter=verbose`，可见性恢复与 2/4/8/16/30/30 秒退避、成功后复位 2 秒共 2 tests passed。
+
+### Task 11 质量修复
+
+- 新增 `20260713133700_chat_message_change_polling`，回填 `Message.updatedAt = GREATEST(sentAt,readAt,editedAt,deletedAt)`，并增加 `(conversationId,updatedAt,id)` 索引；删除由 expression activity indexes 取代的旧 Conversation 普通索引。
+- 空 history 的 legacy `nextAfterCursor` 固定为 Epoch + nil UUID；真实未提交事务测试证明较早 `sentAt`、较晚 commit 的消息仍能被 `after` 取回。
+- UI 改用 `changesAfter`，初始 change watermark 在 canonical pair lock 内建立；send/read 显式写 server-time `updatedAt`，read 只提交本次实际呈现的 message IDs。
+- `loadConversation` 的关系一致性检查合并为单条参数化 raw JOIN；常规 change poll 由 active actor、context、messages 三次数据库操作组成。
+- 会话列表新增独立可见性轮询并合并已加载页；新增 conversation block 产品入口、可访问 reason dialog、blocked composer 与保留历史。
+- load older 错误不再污染主 thread 状态；移动端补充焦点管理与消息 live region；ACCEPTED greeting 直接链接到对应 realm 的站内消息。

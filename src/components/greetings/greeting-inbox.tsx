@@ -129,7 +129,7 @@ export function GreetingInbox({ realm }: { realm: "parent" | "teacher" }) {
     {state === "loading" ? <div className="greeting-empty"><span aria-hidden="true">…</span><h2>正在整理往来卡片…</h2></div> : null}
     {state === "error" ? <div className="greeting-empty"><span aria-hidden="true">!</span><h2>暂时无法读取往来卡片</h2><p>网络可能开了个小差，你可以重新尝试。</p><button className="button button--outline" onClick={() => { setState("loading"); setReloadToken((token) => token + 1); }} type="button">重新加载</button></div> : null}
     {state === "ready" && items.length === 0 ? <div className="greeting-empty"><span aria-hidden="true">信</span><h2>{box === "received" ? "还没有收到打招呼" : "还没有发出打招呼"}</h2><p>从公开名册中找到合适的老师或需求，再通过受控卡片表达意向。</p></div> : null}
-    {state === "ready" && items.length > 0 ? <div className="greeting-list">{items.map((item) => <GreetingCard busy={actionBusy === item.id} item={item} key={item.id} onAction={async (name) => requestAction(item.id, name)} />)}</div> : null}
+    {state === "ready" && items.length > 0 ? <div className="greeting-list">{items.map((item) => <GreetingCard busy={actionBusy === item.id} item={item} key={item.id} onAction={async (name) => requestAction(item.id, name)} realm={realm} />)}</div> : null}
     {state === "ready" ? <nav className="greeting-inbox__pagination" aria-label="往来卡片分页"><button className="button button--outline button--small" disabled={cursorIndex === 0} onClick={previousPage} type="button">上一页</button><button className="button button--outline button--small" disabled={!nextCursor} onClick={nextPage} type="button">下一页</button></nav> : null}
     <dialog
       aria-labelledby="greeting-reason-title"

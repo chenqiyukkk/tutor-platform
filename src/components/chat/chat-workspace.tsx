@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useRef, useState } from "react";
 
+import { BlockConversationDialog } from "./block-conversation-dialog";
 import { ConversationList } from "./conversation-list";
 import { MessageComposer } from "./message-composer";
 import { MessageThread } from "./message-thread";
@@ -13,9 +14,7 @@ import type {
   DisplayMessage,
   MessagePage,
 } from "./types";
-
-const POLL_INTERVAL_MS = 2_000;
-const MAX_POLL_INTERVAL_MS = 30_000;
+import { useVisiblePoller } from "./use-visible-poller";
 
 async function responseJson<T>(response: Response) {
   if (!response.ok) {
@@ -29,6 +28,22 @@ function isAbortError(error: unknown) {
   return error instanceof DOMException && error.name === "AbortError";
 }
 
+function sortConversations(items: ConversationItem[]) {
+  return items.toSorted((left, right) => {
+    const activityDifference = new Date(right.activityAt).getTime() - new Date(left.activityAt).getTime();
+    return activityDifference || left.id.localeCompare(right.id);
+  });
+}
+
+function mergeConversations(current: ConversationItem[], incoming: ConversationItem[]) {
+  const conversations = new Map(current.map((item) => [item.id, item]));
+  for (const item of incoming) {
+    const existing = conversations.get(item.id);
+    conversations.set(item.id, existing ? { ...item, blocked: existing.blocked || item.blocked } : item);
+  }
+  return sortConversations([...conversations.values()]);
+}
+
 function mergeMessages(current: DisplayMessage[], incoming: ChatMessage[]) {
   const messages = new Map(current.map((item) => [item.clientMessageId, item]));
   for (const item of incoming) messages.set(item.clientMessageId, item);
@@ -38,84 +53,143 @@ function mergeMessages(current: DisplayMessage[], incoming: ChatMessage[]) {
   });
 }
 
+function unreadCounterpartIds(items: ChatMessage[]) {
+  return [...new Set(items.filter((item) => !item.mine && item.readAt === null).map(({ id }) => id))];
+}
+
 export function ChatWorkspace({ realm }: { realm: ChatRealm }) {
   const [conversations, setConversations] = useState<ConversationItem[]>([]);
   const [conversationState, setConversationState] = useState<"loading" | "ready" | "error">("loading");
   const [conversationReload, setConversationReload] = useState(0);
   const [conversationNextCursor, setConversationNextCursor] = useState<string | null>(null);
   const [loadingMoreConversations, setLoadingMoreConversations] = useState(false);
+  const [conversationPollEpoch, setConversationPollEpoch] = useState(0);
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [mobileView, setMobileView] = useState<"list" | "thread">("list");
   const [messages, setMessages] = useState<DisplayMessage[]>([]);
   const [threadState, setThreadState] = useState<"idle" | "loading" | "ready" | "error">("idle");
   const [beforeCursor, setBeforeCursor] = useState<string | null>(null);
   const [loadingOlder, setLoadingOlder] = useState(false);
-  const [pollEpoch, setPollEpoch] = useState(0);
+  const [olderError, setOlderError] = useState(false);
+  const [messagePollEpoch, setMessagePollEpoch] = useState(0);
+  const [canPollMessages, setCanPollMessages] = useState(false);
+  const [conversationReadyRealm, setConversationReadyRealm] = useState<ChatRealm | null>(null);
+  const [blockDialogOpen, setBlockDialogOpen] = useState(false);
+  const [blockBusy, setBlockBusy] = useState(false);
+  const [blockError, setBlockError] = useState<string | null>(null);
 
+  const workspaceRef = useRef<HTMLDivElement | null>(null);
+  const threadHeadingRef = useRef<HTMLHeadingElement | null>(null);
+  const blockTriggerRef = useRef<HTMLButtonElement | null>(null);
+  const focusIntent = useRef<"list" | "thread" | null>(null);
+  const restoreBlockFocus = useRef(false);
   const conversationGeneration = useRef(0);
+  const loadedConversationPages = useRef(false);
   const conversationPageController = useRef<AbortController | null>(null);
   const threadGeneration = useRef(0);
   const historyController = useRef<AbortController | null>(null);
   const olderController = useRef<AbortController | null>(null);
-  const pollController = useRef<AbortController | null>(null);
-  const readController = useRef<AbortController | null>(null);
+  const readControllers = useRef(new Set<AbortController>());
+  const blockController = useRef<AbortController | null>(null);
   const sendControllers = useRef(new Map<string, AbortController>());
-  const afterCursor = useRef<string | null>(null);
+  const changesCursor = useRef<string | null>(null);
 
   const selectedConversation = conversations.find(({ id }) => id === selectedId) ?? null;
+
+  const abortReadRequests = useCallback(() => {
+    for (const controller of readControllers.current) controller.abort();
+    readControllers.current.clear();
+  }, []);
 
   useEffect(() => {
     const generation = ++conversationGeneration.current;
     conversationPageController.current?.abort();
+    loadedConversationPages.current = false;
     const controller = new AbortController();
     void fetch(`/api/conversations?realm=${realm}&limit=100`, {
       cache: "no-store",
       signal: controller.signal,
     }).then(responseJson<ConversationPage>).then((page) => {
       if (generation !== conversationGeneration.current) return;
-      setConversations(page.items);
+      const sorted = sortConversations(page.items);
+      setConversations(sorted);
       setConversationNextCursor(page.nextCursor);
       setLoadingMoreConversations(false);
       setMessages([]);
       setBeforeCursor(null);
-      setPollEpoch(0);
-      setThreadState(page.items.length > 0 ? "loading" : "idle");
-      setSelectedId(page.items[0]?.id ?? null);
-      setMobileView(page.items.length > 0 ? "thread" : "list");
+      setOlderError(false);
+      setMessagePollEpoch(0);
+      setThreadState(sorted.length > 0 ? "loading" : "idle");
+      setSelectedId(sorted[0]?.id ?? null);
+      setMobileView(sorted.length > 0 ? "thread" : "list");
       setConversationState("ready");
+      setConversationReadyRealm(realm);
+      setConversationPollEpoch((value) => value + 1);
     }).catch((error: unknown) => {
-      if (generation === conversationGeneration.current && !isAbortError(error)) setConversationState("error");
+      if (generation === conversationGeneration.current && !isAbortError(error)) {
+        setConversationReadyRealm(null);
+        setConversationState("error");
+      }
     });
     return () => controller.abort();
   }, [conversationReload, realm]);
 
-  const markRead = useCallback((conversationId: string, generation: number) => {
+  const pollConversations = useCallback(async (signal: AbortSignal) => {
+    const generation = conversationGeneration.current;
+    const response = await fetch(`/api/conversations?realm=${realm}&limit=100`, { cache: "no-store", signal });
+    const page = await responseJson<ConversationPage>(response);
+    if (generation !== conversationGeneration.current) return { hasMore: false };
+    setConversations((current) => mergeConversations(current, page.items));
+    if (!loadedConversationPages.current) setConversationNextCursor(page.nextCursor);
+    return { hasMore: false };
+  }, [realm]);
+
+  useVisiblePoller({
+    enabled: conversationState === "ready" && conversationReadyRealm === realm && conversationPollEpoch > 0,
+    generation: conversationPollEpoch,
+    pull: pollConversations,
+  });
+
+  const markRead = useCallback((conversationId: string, generation: number, pageItems: ChatMessage[]) => {
+    const messageIds = unreadCounterpartIds(pageItems);
+    if (messageIds.length === 0) return;
     const controller = new AbortController();
-    readController.current?.abort();
-    readController.current = controller;
+    readControllers.current.add(controller);
     void fetch(`/api/conversations/${conversationId}/read?realm=${realm}`, {
       method: "POST",
       headers: { "content-type": "application/json" },
-      body: "{}",
+      body: JSON.stringify({ messageIds }),
       signal: controller.signal,
-    }).then((response) => {
-      if (!response.ok) throw new Error("read failed");
+    }).then(responseJson<{ readCount: number; readAt: string }>).then((result) => {
       if (generation !== threadGeneration.current) return;
-      setConversations((items) => items.map((item) => item.id === conversationId
-        ? { ...item, unreadCount: 0 }
+      const visibleIds = new Set(messageIds);
+      setMessages((items) => items.map((item) => visibleIds.has(item.id) && !item.mine && item.readAt === null
+        ? { ...item, readAt: result.readAt }
         : item));
-    }).catch(() => undefined);
+      setConversations((items) => items.map((item) => item.id === conversationId
+        ? { ...item, unreadCount: Math.max(0, item.unreadCount - result.readCount) }
+        : item));
+    }).catch(() => undefined).finally(() => readControllers.current.delete(controller));
   }, [realm]);
 
   useEffect(() => {
     historyController.current?.abort();
     olderController.current?.abort();
-    pollController.current?.abort();
-    readController.current?.abort();
+    abortReadRequests();
+    blockController.current?.abort();
     for (const controller of sendControllers.current.values()) controller.abort();
     sendControllers.current.clear();
     const generation = ++threadGeneration.current;
-    afterCursor.current = null;
+    changesCursor.current = null;
+    queueMicrotask(() => {
+      if (generation !== threadGeneration.current) return;
+      setBlockDialogOpen(false);
+      setBlockBusy(false);
+      setBlockError(null);
+      setOlderError(false);
+      setCanPollMessages(false);
+      setMessagePollEpoch(0);
+    });
     if (!selectedId) return;
     const controller = new AbortController();
     historyController.current = controller;
@@ -126,115 +200,105 @@ export function ChatWorkspace({ realm }: { realm: ChatRealm }) {
       if (generation !== threadGeneration.current) return;
       setMessages(page.items);
       setBeforeCursor(page.nextBeforeCursor);
-      afterCursor.current = page.nextAfterCursor;
+      changesCursor.current = page.nextChangesCursor;
+      setCanPollMessages(Boolean(page.nextChangesCursor));
       setThreadState("ready");
-      setPollEpoch((value) => value + 1);
-      if (page.items.some((item) => !item.mine && item.readAt === null)) markRead(selectedId, generation);
+      setMessagePollEpoch((value) => value + 1);
+      markRead(selectedId, generation, page.items);
     }).catch((error: unknown) => {
       if (generation === threadGeneration.current && !isAbortError(error)) setThreadState("error");
     });
     return () => controller.abort();
+  }, [abortReadRequests, markRead, realm, selectedId]);
+
+  const pollMessages = useCallback(async (signal: AbortSignal) => {
+    const conversationId = selectedId;
+    const cursor = changesCursor.current;
+    const generation = threadGeneration.current;
+    if (!conversationId || !cursor) return { hasMore: false };
+    const response = await fetch(
+      `/api/conversations/${conversationId}/messages?realm=${realm}&limit=100&changesAfter=${encodeURIComponent(cursor)}`,
+      { cache: "no-store", signal },
+    );
+    const page = await responseJson<MessagePage>(response);
+    if (generation !== threadGeneration.current) return { hasMore: false };
+    setMessages((items) => mergeMessages(items, page.items));
+    changesCursor.current = page.nextChangesCursor ?? cursor;
+    markRead(conversationId, generation, page.items);
+    const newest = page.items.toSorted((left, right) => {
+      const difference = new Date(right.sentAt).getTime() - new Date(left.sentAt).getTime();
+      return difference || right.id.localeCompare(left.id);
+    })[0];
+    if (newest) {
+      setConversations((items) => sortConversations(items.map((item) => {
+        if (item.id !== conversationId) return item;
+        const currentAt = item.lastMessageAt ? new Date(item.lastMessageAt).getTime() : Number.NEGATIVE_INFINITY;
+        return new Date(newest.sentAt).getTime() > currentAt
+          ? { ...item, activityAt: newest.sentAt, lastMessageAt: newest.sentAt }
+          : item;
+      })));
+    }
+    return { hasMore: page.hasMore };
   }, [markRead, realm, selectedId]);
 
+  useVisiblePoller({
+    enabled: Boolean(selectedId && canPollMessages && messagePollEpoch > 0),
+    generation: messagePollEpoch,
+    pull: pollMessages,
+  });
+
   useEffect(() => {
-    if (!selectedId || pollEpoch === 0 || !afterCursor.current) return;
-    const conversationId = selectedId;
-    const generation = threadGeneration.current;
-    let disposed = false;
-    let timer: ReturnType<typeof setTimeout> | null = null;
-    let delay = POLL_INTERVAL_MS;
-
-    function clearTimer() {
-      if (timer) clearTimeout(timer);
-      timer = null;
+    const intent = focusIntent.current;
+    if (!intent) return;
+    focusIntent.current = null;
+    if (intent === "thread") {
+      threadHeadingRef.current?.focus();
+      return;
     }
+    const button = [...(workspaceRef.current?.querySelectorAll<HTMLButtonElement>("[data-conversation-id]") ?? [])]
+      .find((candidate) => candidate.dataset.conversationId === selectedId);
+    button?.focus();
+  }, [mobileView, selectedId]);
 
-    function schedule(milliseconds: number) {
-      if (disposed || document.visibilityState !== "visible") return;
-      clearTimer();
-      timer = setTimeout(() => { void pull(); }, milliseconds);
+  useEffect(() => {
+    if (!blockDialogOpen && restoreBlockFocus.current) {
+      restoreBlockFocus.current = false;
+      blockTriggerRef.current?.focus();
     }
-
-    async function pull() {
-      if (disposed || generation !== threadGeneration.current || document.visibilityState !== "visible") return;
-      const cursor = afterCursor.current;
-      if (!cursor) {
-        schedule(POLL_INTERVAL_MS);
-        return;
-      }
-      const controller = new AbortController();
-      pollController.current?.abort();
-      pollController.current = controller;
-      try {
-        const response = await fetch(
-          `/api/conversations/${conversationId}/messages?realm=${realm}&limit=100&after=${encodeURIComponent(cursor)}`,
-          { cache: "no-store", signal: controller.signal },
-        );
-        const page = await responseJson<MessagePage>(response);
-        if (disposed || generation !== threadGeneration.current) return;
-        setMessages((items) => mergeMessages(items, page.items));
-        afterCursor.current = page.nextAfterCursor ?? cursor;
-        if (page.items.some((item) => !item.mine && item.readAt === null)) markRead(conversationId, generation);
-        if (page.items.length > 0) {
-          const newest = page.items.at(-1)!;
-          setConversations((items) => items.map((item) => item.id === conversationId
-            ? { ...item, activityAt: newest.sentAt, lastMessageAt: newest.sentAt, unreadCount: 0 }
-            : item));
-        }
-        delay = POLL_INTERVAL_MS;
-        schedule(page.hasMore ? 0 : delay);
-      } catch (error) {
-        if (disposed || generation !== threadGeneration.current || isAbortError(error)) return;
-        schedule(delay);
-        delay = Math.min(delay * 2, MAX_POLL_INTERVAL_MS);
-      }
-    }
-
-    function onVisibilityChange() {
-      if (document.visibilityState === "hidden") {
-        clearTimer();
-        pollController.current?.abort();
-        return;
-      }
-      delay = POLL_INTERVAL_MS;
-      clearTimer();
-      void pull();
-    }
-
-    document.addEventListener("visibilitychange", onVisibilityChange);
-    schedule(POLL_INTERVAL_MS);
-    return () => {
-      disposed = true;
-      clearTimer();
-      pollController.current?.abort();
-      document.removeEventListener("visibilitychange", onVisibilityChange);
-    };
-  }, [markRead, pollEpoch, realm, selectedId]);
+  }, [blockDialogOpen, selectedConversation?.blocked]);
 
   useEffect(() => () => {
     conversationPageController.current?.abort();
     historyController.current?.abort();
     olderController.current?.abort();
-    pollController.current?.abort();
-    readController.current?.abort();
+    blockController.current?.abort();
+    abortReadRequests();
     for (const controller of sendControllers.current.values()) controller.abort();
-  }, []);
+  }, [abortReadRequests]);
 
   function selectConversation(id: string) {
+    focusIntent.current = "thread";
     if (id === selectedId) {
       setMobileView("thread");
       return;
     }
     historyController.current?.abort();
     olderController.current?.abort();
-    pollController.current?.abort();
+    abortReadRequests();
     setMessages([]);
     setBeforeCursor(null);
     setLoadingOlder(false);
-    setPollEpoch(0);
+    setOlderError(false);
+    setCanPollMessages(false);
+    setMessagePollEpoch(0);
     setThreadState("loading");
     setSelectedId(id);
     setMobileView("thread");
+  }
+
+  function backToConversationList() {
+    focusIntent.current = "list";
+    setMobileView("list");
   }
 
   async function loadMoreConversations() {
@@ -252,15 +316,8 @@ export function ChatWorkspace({ realm }: { realm: ChatRealm }) {
       );
       const page = await responseJson<ConversationPage>(response);
       if (generation !== conversationGeneration.current) return;
-      setConversations((current) => {
-        const knownIds = new Set(current.map(({ id }) => id));
-        const additions = page.items.filter(({ id }) => {
-          if (knownIds.has(id)) return false;
-          knownIds.add(id);
-          return true;
-        });
-        return [...current, ...additions];
-      });
+      loadedConversationPages.current = true;
+      setConversations((current) => mergeConversations(current, page.items));
       setConversationNextCursor(page.nextCursor);
     } catch (error) {
       if (generation !== conversationGeneration.current || isAbortError(error)) return;
@@ -271,38 +328,45 @@ export function ChatWorkspace({ realm }: { realm: ChatRealm }) {
 
   async function loadOlder() {
     if (!selectedId || !beforeCursor || loadingOlder) return;
+    const conversationId = selectedId;
     const generation = threadGeneration.current;
     const requestedCursor = beforeCursor;
     const controller = new AbortController();
     olderController.current?.abort();
     olderController.current = controller;
+    setOlderError(false);
     setLoadingOlder(true);
     try {
       const response = await fetch(
-        `/api/conversations/${selectedId}/messages?realm=${realm}&limit=50&before=${encodeURIComponent(requestedCursor)}`,
+        `/api/conversations/${conversationId}/messages?realm=${realm}&limit=50&before=${encodeURIComponent(requestedCursor)}`,
         { cache: "no-store", signal: controller.signal },
       );
       const page = await responseJson<MessagePage>(response);
       if (generation !== threadGeneration.current) return;
       setMessages((items) => mergeMessages(items, page.items));
       setBeforeCursor(page.nextBeforeCursor);
+      markRead(conversationId, generation, page.items);
     } catch (error) {
-      if (generation === threadGeneration.current && !isAbortError(error)) setThreadState("error");
+      if (generation === threadGeneration.current && !isAbortError(error)) setOlderError(true);
     } finally {
       if (generation === threadGeneration.current) setLoadingOlder(false);
     }
   }
 
   async function sendMessage(clientMessageId: string, body: string, append: boolean) {
-    if (!selectedId) return;
+    if (!selectedId || selectedConversation?.blocked) return;
     const conversationId = selectedId;
     const generation = threadGeneration.current;
+    const sentAt = new Date().toISOString();
     const optimistic: DisplayMessage = {
       id: `optimistic-${clientMessageId}`,
       clientMessageId,
       body,
-      sentAt: new Date().toISOString(),
+      sentAt,
       readAt: null,
+      editedAt: null,
+      deletedAt: null,
+      updatedAt: sentAt,
       mine: true,
       delivery: "sending",
     };
@@ -322,9 +386,9 @@ export function ChatWorkspace({ realm }: { realm: ChatRealm }) {
       const result = await responseJson<{ message: ChatMessage }>(response);
       if (generation !== threadGeneration.current) return;
       setMessages((items) => mergeMessages(items, [result.message]));
-      setConversations((items) => items.map((item) => item.id === conversationId
+      setConversations((items) => sortConversations(items.map((item) => item.id === conversationId
         ? { ...item, activityAt: result.message.sentAt, lastMessageAt: result.message.sentAt }
-        : item));
+        : item)));
     } catch (error) {
       if (generation === threadGeneration.current && !isAbortError(error)) {
         setMessages((items) => items.map((item) => item.clientMessageId === clientMessageId
@@ -338,6 +402,43 @@ export function ChatWorkspace({ realm }: { realm: ChatRealm }) {
 
   function retryMessage(message: DisplayMessage) {
     void sendMessage(message.clientMessageId, message.body, false);
+  }
+
+  function closeBlockDialog() {
+    if (blockBusy) return;
+    restoreBlockFocus.current = true;
+    setBlockDialogOpen(false);
+    setBlockError(null);
+  }
+
+  async function blockConversation(reason: string) {
+    if (!selectedId || blockBusy) return;
+    const conversationId = selectedId;
+    const generation = threadGeneration.current;
+    const controller = new AbortController();
+    blockController.current?.abort();
+    blockController.current = controller;
+    setBlockBusy(true);
+    setBlockError(null);
+    try {
+      const response = await fetch(`/api/conversations/${conversationId}/block?realm=${realm}`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ reason }),
+        signal: controller.signal,
+      });
+      await responseJson<{ blocked: true }>(response);
+      if (generation !== threadGeneration.current) return;
+      setConversations((items) => items.map((item) => item.id === conversationId ? { ...item, blocked: true } : item));
+      restoreBlockFocus.current = true;
+      setBlockDialogOpen(false);
+    } catch (error) {
+      if (generation === threadGeneration.current && !isAbortError(error)) {
+        setBlockError(error instanceof Error ? error.message : "屏蔽失败，请重试");
+      }
+    } finally {
+      if (generation === threadGeneration.current) setBlockBusy(false);
+    }
   }
 
   return (
@@ -356,7 +457,8 @@ export function ChatWorkspace({ realm }: { realm: ChatRealm }) {
           <h2>暂时无法读取消息</h2>
           <p>网络可能开了个小差，请稍后再试。</p>
           <button className="button button--outline" onClick={() => {
-            setConversationState("loading");
+            setConversationReadyRealm(null);
+            setConversationPollEpoch(0);
             setConversationReload((value) => value + 1);
           }} type="button">
             重新加载
@@ -364,7 +466,7 @@ export function ChatWorkspace({ realm }: { realm: ChatRealm }) {
         </div>
       ) : null}
       {conversationState === "ready" ? (
-        <div className="chat-workspace" data-mobile-view={mobileView} data-testid="chat-workspace">
+        <div className="chat-workspace" data-mobile-view={mobileView} data-testid="chat-workspace" ref={workspaceRef}>
           <ConversationList
             conversations={conversations}
             hasMore={Boolean(conversationNextCursor)}
@@ -378,11 +480,18 @@ export function ChatWorkspace({ realm }: { realm: ChatRealm }) {
               <>
                 <MessageThread
                   beforeCursor={beforeCursor}
+                  blockTriggerRef={blockTriggerRef}
                   conversation={selectedConversation}
+                  headingRef={threadHeadingRef}
                   loading={threadState === "loading"}
                   loadingOlder={loadingOlder}
                   messages={messages}
-                  onBack={() => setMobileView("list")}
+                  olderError={olderError}
+                  onBack={backToConversationList}
+                  onBlock={() => {
+                    setBlockError(null);
+                    setBlockDialogOpen(true);
+                  }}
                   onLoadOlder={() => { void loadOlder(); }}
                   onRetry={retryMessage}
                 />
@@ -390,9 +499,17 @@ export function ChatWorkspace({ realm }: { realm: ChatRealm }) {
                   <p className="chat-thread__error" role="alert">部分消息读取失败，请切换会话后重试。</p>
                 ) : null}
                 <MessageComposer
-                  disabled={threadState !== "ready"}
+                  disabled={threadState !== "ready" || selectedConversation.blocked}
                   onSend={(body) => { void sendMessage(crypto.randomUUID(), body, true); }}
                 />
+                {blockDialogOpen ? (
+                  <BlockConversationDialog
+                    busy={blockBusy}
+                    error={blockError}
+                    onCancel={closeBlockDialog}
+                    onConfirm={(reason) => { void blockConversation(reason); }}
+                  />
+                ) : null}
               </>
             ) : (
               <div className="chat-correspondence__empty">
