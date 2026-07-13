@@ -44,6 +44,7 @@ export function RequestForm({ initialRequest, students, subjects, fetchRegions, 
   const [errors, setErrors] = useState<Record<string, string[]>>({});
   const sequence = useRef(0);
   const controller = useRef<AbortController | null>(null);
+  const inFlightRef = useRef<symbol | null>(null);
 
   const selectedStudent = students.find(({ id }) => id === studentId) ?? null;
   const selectedSubjects = subjects.filter(({ id }) => subjectIds.includes(id));
@@ -80,7 +81,9 @@ export function RequestForm({ initialRequest, students, subjects, fetchRegions, 
     signal: AbortSignal;
     commitRequest: (result: TutoringRequestDto) => void;
   }) => Promise<{ result: TutoringRequestDto; message: string }>) {
-    if (busy) return;
+    if (inFlightRef.current) return;
+    const owner = Symbol("request-mutation");
+    inFlightRef.current = owner;
     controller.current?.abort();
     const nextController = new AbortController();
     controller.current = nextController;
@@ -102,7 +105,10 @@ export function RequestForm({ initialRequest, students, subjects, fetchRegions, 
         setNotice(error instanceof Error ? error.message : "操作失败，请稍后重试");
       }
     } finally {
-      if (sequence.current === currentSequence) setBusy(false);
+      if (inFlightRef.current === owner) {
+        inFlightRef.current = null;
+        if (sequence.current === currentSequence) setBusy(false);
+      }
     }
   }
 

@@ -45,10 +45,15 @@ function toRequest(row: RequestRow): TutoringRequest {
 }
 
 async function parentProfile(client: Client, accountId: string) {
-  const account = await client.account.findUnique({ where: { id: accountId }, select: { role: true, username: true, parentProfile: { select: { id: true } } } });
+  const account = await client.account.findUnique({ where: { id: accountId }, select: { role: true, username: true } });
   if (!account || account.role !== "PARENT") throw new RequestWorkflowError("FORBIDDEN", "仅家长账号可管理学生与家教需求");
-  if (account.parentProfile) return account.parentProfile;
-  return client.parentProfile.create({ data: { accountId, displayName: account.username }, select: { id: true } });
+  const [profile] = await client.$queryRaw<Array<{ id: string }>>`
+    INSERT INTO "ParentProfile" ("id", "accountId", "displayName", "updatedAt")
+    VALUES (${crypto.randomUUID()}::uuid, ${accountId}::uuid, ${account.username}, now())
+    ON CONFLICT ("accountId") DO UPDATE SET "accountId" = EXCLUDED."accountId"
+    RETURNING "id"
+  `;
+  return profile;
 }
 
 async function findOwnedRequest(client: Client, accountId: string, id: string) {
@@ -106,8 +111,23 @@ export class PrismaRequestRepository implements RequestRepository {
   }
 
   async deactivateStudent(accountId: string, id: string) {
-    const result = await this.prisma.studentProfile.updateMany({ where: { id, parentProfile: { accountId }, isActive: true }, data: { isActive: false } });
-    if (!result.count) throw new RequestWorkflowError("NOT_FOUND", "学生档案不存在");
+    await this.prisma.$transaction(async (transaction) => {
+      const owned = await transaction.studentProfile.findFirst({ where: { id, parentProfile: { accountId }, isActive: true }, select: { id: true } });
+      if (!owned) throw new RequestWorkflowError("NOT_FOUND", "学生档案不存在");
+      await transaction.$queryRaw`
+        SELECT "id" FROM "TutoringRequest"
+        WHERE "studentProfileId" = ${id}::uuid
+        ORDER BY "id" FOR UPDATE
+      `;
+      await transaction.$queryRaw`SELECT "id" FROM "StudentProfile" WHERE "id" = ${id}::uuid FOR UPDATE`;
+      const current = await transaction.studentProfile.findFirst({ where: { id, parentProfile: { accountId }, isActive: true }, select: { id: true } });
+      if (!current) throw new RequestWorkflowError("NOT_FOUND", "学生档案不存在");
+      await transaction.tutoringRequest.updateMany({
+        where: { studentProfileId: id, status: "PUBLISHED" },
+        data: { status: "DRAFT", publishedAt: null, closedAt: null },
+      });
+      await transaction.studentProfile.update({ where: { id }, data: { isActive: false } });
+    });
   }
 
   async listRequests(accountId: string) {

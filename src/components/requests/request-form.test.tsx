@@ -37,6 +37,17 @@ describe("RequestForm", () => {
     resolve(new Response(JSON.stringify({ request: { id: "11111111-1111-4111-8111-111111111111", status: "DRAFT" } }), { status: 201, headers: { "content-type": "application/json" } }));
   });
 
+  it("synchronously admits only one save when two submits occur in the same tick", () => {
+    const fetcher = vi.fn(() => new Promise<Response>(() => undefined));
+    const { container } = render(<RequestForm initialRequest={null} students={[student]} subjects={[subject]} fetchRegions={async () => []} fetcher={fetcher} />);
+    const form = container.querySelector("form")!;
+    act(() => {
+      form.dispatchEvent(new Event("submit", { bubbles: true, cancelable: true }));
+      form.dispatchEvent(new Event("submit", { bubbles: true, cancelable: true }));
+    });
+    expect(fetcher).toHaveBeenCalledTimes(1);
+  });
+
   it("keeps a newly-created draft when publish fails and reuses its id on retry", async () => {
     const user = userEvent.setup();
     const fetcher = vi.fn()
@@ -70,7 +81,7 @@ describe("RequestForm", () => {
     expect(screen.queryByText(/编辑并保存后/)).not.toBeInTheDocument();
   });
 
-  it("ignores a stale field error that arrives after a newer save succeeds", async () => {
+  it("releases the synchronous lock after its owner fails so a later save can succeed", async () => {
     let resolveOld!: (response: Response) => void;
     let resolveNew!: (response: Response) => void;
     const fetcher = vi.fn()
@@ -82,16 +93,16 @@ describe("RequestForm", () => {
       form.dispatchEvent(new Event("submit", { bubbles: true, cancelable: true }));
       form.dispatchEvent(new Event("submit", { bubbles: true, cancelable: true }));
     });
-    expect(fetcher).toHaveBeenCalledTimes(2);
-
-    await act(async () => { resolveNew(json({ request: savedDraft }, 201)); });
-    expect(await screen.findByText("草稿已保存")).toBeInTheDocument();
     await act(async () => { resolveOld(json({ error: "旧错误", fieldErrors: { subjectIds: ["旧科目错误"] } }, 400)); });
+    expect(await screen.findByText("旧科目错误")).toBeInTheDocument();
+    act(() => { form.dispatchEvent(new Event("submit", { bubbles: true, cancelable: true })); });
+    expect(fetcher).toHaveBeenCalledTimes(2);
+    await act(async () => { resolveNew(json({ request: savedDraft }, 201)); });
     expect(screen.queryByText("旧科目错误")).not.toBeInTheDocument();
     expect(screen.getByText("草稿已保存")).toBeInTheDocument();
   });
 
-  it("ignores a stale success that arrives after a newer draft", async () => {
+  it("releases the synchronous lock after its owner succeeds", async () => {
     let resolveOld!: (response: Response) => void;
     let resolveNew!: (response: Response) => void;
     const fetcher = vi.fn()
@@ -103,8 +114,11 @@ describe("RequestForm", () => {
       form.dispatchEvent(new Event("submit", { bubbles: true, cancelable: true }));
       form.dispatchEvent(new Event("submit", { bubbles: true, cancelable: true }));
     });
-    await act(async () => { resolveNew(json({ request: savedDraft }, 201)); });
     await act(async () => { resolveOld(json({ request: published }, 201)); });
+    expect(screen.getByText("招募中")).toBeInTheDocument();
+    act(() => { form.dispatchEvent(new Event("submit", { bubbles: true, cancelable: true })); });
+    expect(fetcher).toHaveBeenCalledTimes(2);
+    await act(async () => { resolveNew(json({ request: savedDraft }, 201)); });
     expect(screen.getByText("草稿")).toBeInTheDocument();
     expect(screen.queryByText("招募中")).not.toBeInTheDocument();
   });
