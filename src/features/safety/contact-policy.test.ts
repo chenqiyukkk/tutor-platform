@@ -13,6 +13,10 @@ describe("public contact policy", () => {
     "Signal: tutor88",
     "请访问 teacher.example.com",
     "个人主页 tutor.cn",
+    "手机号 13800138000",
+    "座机 010-88886666",
+    "ＷｈａｔｓＡｐｐ tutor88",
+    "We\u200BChat tutor88",
   ])("rejects external contact channel: %s", (value) => {
     expect(violatesContactPolicy(value)).toBe(true);
   });

@@ -88,6 +88,16 @@ describe("Prisma parent request repository", () => {
     const draft = await service.createDraft(caller, input);
     const published = await service.createDraft(caller, input);
     await service.publish(caller, published.id);
+
+    await expect(prisma.tutoringRequest.findUniqueOrThrow({ where: { id: published.id } }))
+      .resolves.toMatchObject({ publicContentSafetyVersion: 1 });
+    await service.updateStudent(caller, student.id, {
+      publicAlias: `${student.publicAlias}新`,
+      grade: student.grade,
+      notes: student.notes,
+    });
+    await expect(prisma.tutoringRequest.findUniqueOrThrow({ where: { id: published.id } }))
+      .resolves.toMatchObject({ status: "PUBLISHED", publicContentSafetyVersion: 1 });
     const closed = await service.createDraft(caller, input);
     const closedResult = await service.close(caller, closed.id);
 
@@ -223,9 +233,17 @@ describe("Prisma parent request repository", () => {
     await prisma.studentProfile.update({ where: { id: studentA.id }, data: { isActive: true } });
 
     await expect(service.publish(parentA, draft.id)).resolves.toMatchObject({ status: "PUBLISHED", publishedAt: expect.any(Date) });
+    await expect(prisma.tutoringRequest.findUniqueOrThrow({ where: { id: draft.id } }))
+      .resolves.toMatchObject({ publicContentSafetyVersion: 1 });
     await expect(service.updateDraft(parentA, draft.id, { ...complete, subjectIds: [subjects[0].id] })).resolves.toMatchObject({ status: "DRAFT", publishedAt: null });
+    await expect(prisma.tutoringRequest.findUniqueOrThrow({ where: { id: draft.id } }))
+      .resolves.toMatchObject({ publicContentSafetyVersion: 0 });
     await expect(service.publish(parentA, draft.id)).resolves.toMatchObject({ status: "PUBLISHED" });
+    await expect(prisma.tutoringRequest.findUniqueOrThrow({ where: { id: draft.id } }))
+      .resolves.toMatchObject({ publicContentSafetyVersion: 1 });
     await expect(service.close(parentA, draft.id)).resolves.toMatchObject({ status: "CLOSED", publishedAt: null, closedAt: expect.any(Date) });
+    await expect(prisma.tutoringRequest.findUniqueOrThrow({ where: { id: draft.id } }))
+      .resolves.toMatchObject({ publicContentSafetyVersion: 0 });
     await expect(service.publish(parentA, draft.id)).rejects.toMatchObject({ code: "CONFLICT" });
     await expect(service.updateDraft(parentA, draft.id, complete)).rejects.toMatchObject({ code: "CONFLICT" });
 

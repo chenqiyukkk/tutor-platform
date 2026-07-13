@@ -135,21 +135,22 @@ model PasswordResetToken {
 }
 
 model TeacherProfile {
-  id              String               @id @default(uuid()) @db.Uuid
-  accountId       String               @unique @db.Uuid
-  displayName     String
-  identityType    TeacherIdentityType?
-  headline        String?
-  bio             String?
-  avatarUrl       String?
-  yearsExperience Int?
-  hourlyRate      Decimal?             @db.Decimal(10, 2)
-  hourlyRateMax   Decimal?             @db.Decimal(10, 2)
-  isOnline        Boolean              @default(false)
-  status          ProfileStatus        @default(DRAFT)
-  publishedAt     DateTime?            @db.Timestamptz(3)
-  createdAt       DateTime             @default(now()) @db.Timestamptz(3)
-  updatedAt       DateTime             @updatedAt @db.Timestamptz(3)
+  id                         String               @id @default(uuid()) @db.Uuid
+  accountId                  String               @unique @db.Uuid
+  displayName                String
+  identityType               TeacherIdentityType?
+  headline                   String?
+  bio                        String?
+  avatarUrl                  String?
+  yearsExperience            Int?
+  hourlyRate                 Decimal?             @db.Decimal(10, 2)
+  hourlyRateMax              Decimal?             @db.Decimal(10, 2)
+  isOnline                   Boolean              @default(false)
+  status                     ProfileStatus        @default(DRAFT)
+  publishedAt                DateTime?            @db.Timestamptz(3)
+  publicContentSafetyVersion Int                  @default(0)
+  createdAt                  DateTime             @default(now()) @db.Timestamptz(3)
+  updatedAt                  DateTime             @updatedAt @db.Timestamptz(3)
 
   account       Account              @relation(fields: [accountId], references: [id], onDelete: Cascade)
   subjects      TeacherSubject[]
@@ -159,6 +160,7 @@ model TeacherProfile {
 
   @@index([status])
   @@index([status, publishedAt(sort: Desc), id])
+  @@index([status, publicContentSafetyVersion, publishedAt(sort: Desc), id])
 }
 
 model ParentProfile {
@@ -273,23 +275,24 @@ model TeacherServiceArea {
 }
 
 model TutoringRequest {
-  id                 String        @id @default(uuid()) @db.Uuid
-  parentProfileId    String        @db.Uuid
-  studentProfileId   String?       @db.Uuid
-  regionId           String?       @db.Uuid
-  title              String
-  description        String
-  scheduleText       String?       @map("schedule")
-  budgetMin          Int?
-  budgetMax          Int?
-  teachingMode       TeachingMode?
-  publicLocationNote String?
-  status             RequestStatus @default(DRAFT)
-  publishedAt        DateTime?     @db.Timestamptz(3)
-  closedAt           DateTime?     @db.Timestamptz(3)
-  expiresAt          DateTime?     @db.Timestamptz(3)
-  createdAt          DateTime      @default(now()) @db.Timestamptz(3)
-  updatedAt          DateTime      @updatedAt @db.Timestamptz(3)
+  id                         String        @id @default(uuid()) @db.Uuid
+  parentProfileId            String        @db.Uuid
+  studentProfileId           String?       @db.Uuid
+  regionId                   String?       @db.Uuid
+  title                      String
+  description                String
+  scheduleText               String?       @map("schedule")
+  budgetMin                  Int?
+  budgetMax                  Int?
+  teachingMode               TeachingMode?
+  publicLocationNote         String?
+  status                     RequestStatus @default(DRAFT)
+  publishedAt                DateTime?     @db.Timestamptz(3)
+  closedAt                   DateTime?     @db.Timestamptz(3)
+  expiresAt                  DateTime?     @db.Timestamptz(3)
+  publicContentSafetyVersion Int           @default(0)
+  createdAt                  DateTime      @default(now()) @db.Timestamptz(3)
+  updatedAt                  DateTime      @updatedAt @db.Timestamptz(3)
 
   parentProfile  ParentProfile    @relation(fields: [parentProfileId], references: [id], onDelete: Cascade)
   studentProfile StudentProfile?  @relation(fields: [studentProfileId], references: [id], onDelete: SetNull)
@@ -304,6 +307,7 @@ model TutoringRequest {
   @@index([regionId, status])
   @@index([publishedAt])
   @@index([status, publishedAt(sort: Desc), id])
+  @@index([status, publicContentSafetyVersion, publishedAt(sort: Desc), id])
 }
 
 model RequestSubject {

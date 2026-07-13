@@ -143,5 +143,32 @@ describe("public content safety migration", () => {
     expect(sql).toContain('"publishedAt" = NULL');
     expect(sql).toContain('btrim("headline") = \'\'');
     expect(sql).toContain('"StudentProfile"');
+    expect(sql.trimStart().startsWith("BEGIN;")).toBe(true);
+    expect(sql.trimEnd().endsWith("COMMIT;")).toBe(true);
+    const lockSteps = [
+      'LOCK TABLE "TeacherProfile"',
+      'LOCK TABLE "TutoringRequest"',
+      'LOCK TABLE "StudentProfile"',
+    ].map((step) => sql.indexOf(step));
+    expect(lockSteps.every((position) => position >= 0)).toBe(true);
+    expect(lockSteps).toEqual([...lockSteps].sort((left, right) => left - right));
+    expect(sql).toContain("regexp_replace");
+    expect(sql).toContain("13800138000");
+    expect(sql).toMatch(/FF01|fullwidth|Ｗ/u);
+    expect(sql).toMatch(/200B|zero.width|8203/iu);
+  });
+
+  it("persists a current safety version for database-first public pagination", () => {
+    expect(schema).toMatch(/publicContentSafetyVersion\s+Int\s+@default\(0\)/g);
+    const versionMigration = readdirSync(migrationsDirectory, { withFileTypes: true }).find(
+      (entry) => entry.isDirectory() && entry.name === "20260713133500_public_content_safety_version",
+    );
+    expect(versionMigration).toBeDefined();
+    if (!versionMigration) return;
+    const sql = readFileSync(join(migrationsDirectory, versionMigration.name, "migration.sql"), "utf8");
+    expect(sql).toContain('ADD COLUMN "publicContentSafetyVersion" INTEGER NOT NULL DEFAULT 0');
+    expect(sql).toContain('UPDATE "TeacherProfile"');
+    expect(sql).toContain('UPDATE "TutoringRequest"');
+    expect(sql).toContain('"publicContentSafetyVersion" = 1');
   });
 });

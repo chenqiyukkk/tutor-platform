@@ -2,6 +2,7 @@ import "server-only";
 
 import { Prisma, type PrismaClient } from "@prisma/client";
 import { contactPolicyMessage, violatesContactPolicy } from "@/features/safety/contact-policy";
+import { CURRENT_PUBLIC_CONTENT_SAFETY_VERSION } from "@/features/safety/public-content-version";
 
 import {
   RequestWorkflowError,
@@ -173,7 +174,7 @@ export class PrismaRequestRepository implements RequestRepository {
       if (!current) throw new RequestWorkflowError("NOT_FOUND", "学生档案不存在");
       await transaction.tutoringRequest.updateMany({
         where: { studentProfileId: id, status: "PUBLISHED" },
-        data: { status: "DRAFT", publishedAt: null, closedAt: null },
+        data: { status: "DRAFT", publishedAt: null, closedAt: null, publicContentSafetyVersion: 0 },
       });
       await transaction.studentProfile.update({ where: { id }, data: { isActive: false } });
     });
@@ -221,7 +222,7 @@ export class PrismaRequestRepository implements RequestRepository {
       if (current.status === "CLOSED") throw new RequestWorkflowError("CONFLICT", "已关闭的需求不可编辑");
       await validateReferences(transaction, current.parentProfileId, input);
       await transaction.requestSubject.deleteMany({ where: { tutoringRequestId: id } });
-      await transaction.tutoringRequest.update({ where: { id }, data: { ...requestData(input), status: "DRAFT", publishedAt: null, closedAt: null } });
+      await transaction.tutoringRequest.update({ where: { id }, data: { ...requestData(input), status: "DRAFT", publishedAt: null, closedAt: null, publicContentSafetyVersion: 0 } });
       if (input.subjectIds.length) await transaction.requestSubject.createMany({ data: input.subjectIds.map((subjectId) => ({ tutoringRequestId: id, subjectId })) });
       const row = await findOwnedRequestSequential(transaction, accountId, id);
       if (!row) throw new RequestWorkflowError("NOT_FOUND", "需求不存在");
@@ -259,7 +260,10 @@ export class PrismaRequestRepository implements RequestRepository {
       if (current.regionId && (!current.region || !current.region.isActive || current.region.level !== 3)) throw new RequestWorkflowError("INVALID_REGION", "地区无效或已停用", { regionId: ["请选择有效且启用的区县"] });
       const errors = validatePublishable(domain);
       if (Object.keys(errors).length) throw new RequestWorkflowError("INCOMPLETE_REQUEST", "请完善需求后再发布", errors);
-      await transaction.tutoringRequest.update({ where: { id }, data: { status: "PUBLISHED", publishedAt: new Date(), closedAt: null } });
+      await transaction.tutoringRequest.update({ where: { id }, data: {
+        status: "PUBLISHED", publishedAt: new Date(), closedAt: null,
+        publicContentSafetyVersion: CURRENT_PUBLIC_CONTENT_SAFETY_VERSION,
+      } });
       const row = await findOwnedRequestSequential(transaction, accountId, id);
       if (!row) throw new RequestWorkflowError("NOT_FOUND", "需求不存在");
       return toRequest(row);
@@ -280,7 +284,9 @@ export class PrismaRequestRepository implements RequestRepository {
         if (!current) throw new RequestWorkflowError("NOT_FOUND", "需求不存在");
         return toRequest(current);
       }
-      await transaction.tutoringRequest.update({ where: { id }, data: { status: "CLOSED", publishedAt: null, closedAt: new Date() } });
+      await transaction.tutoringRequest.update({ where: { id }, data: {
+        status: "CLOSED", publishedAt: null, closedAt: new Date(), publicContentSafetyVersion: 0,
+      } });
       const current = await findOwnedRequestSequential(transaction, accountId, id);
       if (!current) throw new RequestWorkflowError("NOT_FOUND", "需求不存在");
       return toRequest(current);

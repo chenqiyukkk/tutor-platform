@@ -1,6 +1,7 @@
 import "server-only";
 
 import { Prisma, type PrismaClient } from "@prisma/client";
+import { CURRENT_PUBLIC_CONTENT_SAFETY_VERSION } from "@/features/safety/public-content-version";
 
 import {
   TeacherProfileError,
@@ -118,6 +119,7 @@ export class PrismaTeacherProfileRepository implements TeacherProfileRepository 
           isOnline: input.online,
           hourlyRate: fromCents(input.rateMinCents),
           hourlyRateMax: fromCents(input.rateMaxCents),
+          publicContentSafetyVersion: 0,
         },
         update: {
           displayName: input.publicNickname,
@@ -130,6 +132,7 @@ export class PrismaTeacherProfileRepository implements TeacherProfileRepository 
           hourlyRateMax: fromCents(input.rateMaxCents),
           status: "DRAFT",
           publishedAt: null,
+          publicContentSafetyVersion: 0,
         },
         select: { id: true },
       });
@@ -216,6 +219,7 @@ export class PrismaTeacherProfileRepository implements TeacherProfileRepository 
         data: {
           status: published ? "PUBLISHED" : "DRAFT",
           publishedAt: published ? new Date() : null,
+          publicContentSafetyVersion: published ? CURRENT_PUBLIC_CONTENT_SAFETY_VERSION : 0,
         },
       });
       if (!result.count) throw new TeacherProfileError("NOT_FOUND", "教师资料不存在");

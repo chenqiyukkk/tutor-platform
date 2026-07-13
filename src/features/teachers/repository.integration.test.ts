@@ -130,6 +130,7 @@ describe("Prisma teacher profile repository", () => {
 
     await service.saveDraft(teacherA, {
       publicNickname: "A 老师",
+      headline: "把复杂知识讲清楚",
       identityType: "FULL_TIME_TEACHER",
       bio: "长期从事一线教学，能够根据学生情况设计清晰的学习路径。",
       yearsExperience: 8,
@@ -161,6 +162,7 @@ describe("Prisma teacher profile repository", () => {
 
     await service.saveDraft(teacherA, {
       publicNickname: "A 老师",
+      headline: "把复杂知识讲清楚",
       identityType: "FULL_TIME_TEACHER",
       bio: "长期从事一线教学，能够根据学生情况设计清晰的学习路径。",
       yearsExperience: 8,
@@ -196,6 +198,7 @@ describe("Prisma teacher profile repository", () => {
 
     await service.saveDraft(teacherA, {
       publicNickname: "A 老师",
+      headline: "把复杂知识讲清楚",
       identityType: "FULL_TIME_TEACHER",
       bio: "长期从事一线教学，能够根据学生情况设计清晰的学习路径。",
       yearsExperience: 8,
@@ -229,6 +232,11 @@ describe("Prisma teacher profile repository", () => {
       });
       await expect(deactivate).rejects.toThrow();
       await expect(delayedPublish).resolves.toMatchObject({ status: "PUBLISHED" });
+      await expect(prisma.teacherProfile.findUniqueOrThrow({ where: { accountId: accountA.id } }))
+        .resolves.toMatchObject({ publicContentSafetyVersion: 1 });
+      await service.unpublish(teacherA);
+      await expect(prisma.teacherProfile.findUniqueOrThrow({ where: { accountId: accountA.id } }))
+        .resolves.toMatchObject({ status: "DRAFT", publicContentSafetyVersion: 0 });
     } finally {
       await delayedPublish.catch(() => undefined);
       await prisma.$executeRawUnsafe(`DROP TRIGGER IF EXISTS "${triggerName}" ON "TeacherProfile"`);

@@ -27,8 +27,10 @@ const MIGRATIONS = [
   "20260713133200_validate_greeting_context",
   "20260713133300_favorite_list_sort_index",
   "20260713133400_public_content_safety",
+  "20260713133500_public_content_safety_version",
 ] as const;
 const WORKFLOW_MIGRATION = "20260713133000_greeting_workflow";
+const PUBLIC_SAFETY_MIGRATION = "20260713133400_public_content_safety";
 const TEMP_WORKSPACE_ROOT = join(tmpdir(), "tutor-platform-greeting-migrations");
 const prismaCli = join(process.cwd(), "node_modules", "prisma", "build", "index.js");
 const tempRoots: string[] = [];
@@ -184,7 +186,7 @@ describe("greeting workflow migration upgrades", () => {
     expect(isSafeMigrationWorkspace(join(tmpdir(), "another-project", "run-example"))).toBe(false);
   });
 
-  it("deploys all 13 migrations into an empty database", async () => {
+  it("deploys all 14 migrations into an empty database", async () => {
     const database = await createDatabase();
     const root = createMigrationWorkspace(MIGRATIONS.length);
     const client = new Client({ connectionString: database.url });
@@ -192,7 +194,7 @@ describe("greeting workflow migration upgrades", () => {
       expectPrismaSuccess(runPrisma(root, database.url, ["migrate", "deploy"]));
       await client.connect();
       const applied = await client.query(`SELECT count(*)::int AS count FROM "_prisma_migrations" WHERE finished_at IS NOT NULL AND rolled_back_at IS NULL`);
-      expect(applied.rows[0].count).toBe(13);
+      expect(applied.rows[0].count).toBe(14);
     } finally {
       await client.end().catch(() => undefined);
       await cleanupMigrationWorkspace(root);
@@ -204,7 +206,17 @@ describe("greeting workflow migration upgrades", () => {
     const root = createMigrationWorkspace(MIGRATIONS.length - 1);
     const client = new Client({ connectionString: database.url });
     const stamp = new Date("2026-07-01T12:00:00.000Z");
-    const unsafeTeacherAccountId = randomUUID(), unsafeTeacherProfileId = randomUUID();
+    const unsafeTeacherTexts = [
+      "手机号 13800138000",
+      "座机 010-88886666",
+      "ＷｈａｔｓＡｐｐ tutor88",
+      "We\u200BChat tutor88",
+    ];
+    const unsafeTeachers = unsafeTeacherTexts.map((text) => ({
+      text,
+      accountId: randomUUID(),
+      profileId: randomUUID(),
+    }));
     const safeTeacherAccountId = randomUUID(), safeTeacherProfileId = randomUUID();
     const parentId = randomUUID(), parentProfileId = randomUUID();
     const unsafeStudentId = randomUUID(), safeStudentId = randomUUID();
@@ -213,7 +225,7 @@ describe("greeting workflow migration upgrades", () => {
       expectPrismaSuccess(runPrisma(root, database.url, ["migrate", "deploy"]));
       await client.connect();
       for (const [id, role, label] of [
-        [unsafeTeacherAccountId, "TEACHER", "unsafe-teacher"],
+        ...unsafeTeachers.map(({ accountId }, index) => [accountId, "TEACHER", `unsafe-teacher-${index}`] as const),
         [safeTeacherAccountId, "TEACHER", "safe-teacher"],
         [parentId, "PARENT", "parent"],
       ] as const) {
@@ -222,12 +234,16 @@ describe("greeting workflow migration upgrades", () => {
           VALUES ($1,$2,$3,$3,$4,$4,'hash',$5,$5)
         `, [id, role, `${label}-${id}`, `${label}-${id}@example.test`, stamp]);
       }
+      for (const unsafe of unsafeTeachers) {
+        await client.query(`
+          INSERT INTO "TeacherProfile" ("id","accountId","displayName","headline","bio","status","publishedAt","createdAt","updatedAt")
+          VALUES ($1,$2,'Legacy unsafe teacher',$3,'Math tutoring','PUBLISHED',$4,$4,$4)
+        `, [unsafe.profileId, unsafe.accountId, unsafe.text, stamp]);
+      }
       await client.query(`
         INSERT INTO "TeacherProfile" ("id","accountId","displayName","headline","bio","status","publishedAt","createdAt","updatedAt")
-        VALUES
-          ($1,$2,'Legacy unsafe teacher',NULL,'Math tutoring','PUBLISHED',$5,$5,$5),
-          ($3,$4,'Node.js teacher','Vue.js and signal processing','Technical tutoring','PUBLISHED',$5,$5,$5)
-      `, [unsafeTeacherProfileId, unsafeTeacherAccountId, safeTeacherProfileId, safeTeacherAccountId, stamp]);
+        VALUES ($1,$2,'Node.js teacher','Vue.js and signal processing','Technical tutoring','PUBLISHED',$3,$3,$3)
+      `, [safeTeacherProfileId, safeTeacherAccountId, stamp]);
       await client.query(`
         INSERT INTO "ParentProfile" ("id","accountId","displayName","status","createdAt","updatedAt")
         VALUES ($1,$2,'Legacy parent','PUBLISHED',$3,$3)
@@ -245,14 +261,16 @@ describe("greeting workflow migration upgrades", () => {
 
       copyMigrations(root, MIGRATIONS.length);
       expectPrismaSuccess(runPrisma(root, database.url, ["migrate", "deploy"]));
-      const teachers = await client.query(`SELECT "id","status","publishedAt" FROM "TeacherProfile" ORDER BY "id"`);
+      const teachers = await client.query(`SELECT "id","status","publishedAt","publicContentSafetyVersion" FROM "TeacherProfile" ORDER BY "id"`);
       const teacherById = new Map(teachers.rows.map((row) => [row.id, row]));
-      expect(teacherById.get(unsafeTeacherProfileId)).toMatchObject({ status: "DRAFT", publishedAt: null });
-      expect(teacherById.get(safeTeacherProfileId)).toMatchObject({ status: "PUBLISHED", publishedAt: stamp });
-      const requests = await client.query(`SELECT "id","status","publishedAt" FROM "TutoringRequest" ORDER BY "id"`);
+      for (const unsafe of unsafeTeachers) {
+        expect(teacherById.get(unsafe.profileId)).toMatchObject({ status: "DRAFT", publishedAt: null, publicContentSafetyVersion: 0 });
+      }
+      expect(teacherById.get(safeTeacherProfileId)).toMatchObject({ status: "PUBLISHED", publishedAt: stamp, publicContentSafetyVersion: 1 });
+      const requests = await client.query(`SELECT "id","status","publishedAt","publicContentSafetyVersion" FROM "TutoringRequest" ORDER BY "id"`);
       const requestById = new Map(requests.rows.map((row) => [row.id, row]));
-      expect(requestById.get(unsafeRequestId)).toMatchObject({ status: "DRAFT", publishedAt: null });
-      expect(requestById.get(safeRequestId)).toMatchObject({ status: "PUBLISHED", publishedAt: stamp });
+      expect(requestById.get(unsafeRequestId)).toMatchObject({ status: "DRAFT", publishedAt: null, publicContentSafetyVersion: 0 });
+      expect(requestById.get(safeRequestId)).toMatchObject({ status: "PUBLISHED", publishedAt: stamp, publicContentSafetyVersion: 1 });
     } finally {
       await client.end().catch(() => undefined);
       await cleanupMigrationWorkspace(root);
@@ -339,6 +357,63 @@ describe("greeting workflow migration upgrades", () => {
     },
     90_000,
   );
+
+  it("locks public writers before the 133400 scan and demotes an in-flight unsafe commit", async () => {
+    const database = await createDatabase();
+    const root = createMigrationWorkspace(12);
+    const writer = new Client({ connectionString: database.url });
+    const migrator = new Client({ connectionString: database.url });
+    const observer = new Client({ connectionString: database.url });
+    const accountId = randomUUID(), profileId = randomUUID();
+    const stamp = new Date("2026-07-01T12:00:00.000Z");
+    let migration: Promise<unknown> | undefined;
+    try {
+      expectPrismaSuccess(runPrisma(root, database.url, ["migrate", "deploy"]));
+      await Promise.all([writer.connect(), migrator.connect(), observer.connect()]);
+      await writer.query(`
+        INSERT INTO "Account" ("id","role","username","normalizedUsername","email","normalizedEmail","passwordHash","createdAt","updatedAt")
+        VALUES ($1,'TEACHER',$2,$2,$3,$3,'hash',$4,$4)
+      `, [accountId, `lock-teacher-${accountId}`, `lock-teacher-${accountId}@example.test`, stamp]);
+      await writer.query(`
+        INSERT INTO "TeacherProfile" ("id","accountId","displayName","headline","bio","status","publishedAt","createdAt","updatedAt")
+        VALUES ($1,$2,'Lock teacher','Safe headline','Technical tutoring','PUBLISHED',$3,$3,$3)
+      `, [profileId, accountId, stamp]);
+      await writer.query("BEGIN");
+      await writer.query(`UPDATE "TeacherProfile" SET "headline" = $1 WHERE "id" = $2`, ["We\u200BChat tutor88", profileId]);
+
+      const migratorPid = Number((await migrator.query(`SELECT pg_backend_pid() AS pid`)).rows[0].pid);
+      const sql = readFileSync(join(process.cwd(), "prisma", "migrations", PUBLIC_SAFETY_MIGRATION, "migration.sql"), "utf8");
+      migration = migrator.query(sql);
+      let waitingModes: string[] = [];
+      const deadline = Date.now() + 5_000;
+      while (Date.now() < deadline) {
+        const locks = await observer.query<{ mode: string }>(`
+          SELECT mode FROM pg_locks
+          WHERE pid = $1
+            AND relation = '"TeacherProfile"'::regclass
+            AND NOT granted
+        `, [migratorPid]);
+        waitingModes = locks.rows.map(({ mode }) => mode);
+        if (waitingModes.length) break;
+        await delay(25);
+      }
+      expect(waitingModes).toContain("ShareRowExclusiveLock");
+
+      await writer.query("COMMIT");
+      await migration;
+      const migrated = await observer.query(`SELECT "status","publishedAt" FROM "TeacherProfile" WHERE "id" = $1`, [profileId]);
+      expect(migrated.rows[0]).toMatchObject({ status: "DRAFT", publishedAt: null });
+    } finally {
+      await writer.query("ROLLBACK").catch(() => undefined);
+      await migration?.catch(() => undefined);
+      await Promise.all([
+        writer.end().catch(() => undefined),
+        migrator.end().catch(() => undefined),
+        observer.end().catch(() => undefined),
+      ]);
+      await cleanupMigrationWorkspace(root);
+    }
+  }, 60_000);
 
   it("locks legacy write tables before preflight and migrates a transaction that was already in flight", async () => {
     const database = await createDatabase();
