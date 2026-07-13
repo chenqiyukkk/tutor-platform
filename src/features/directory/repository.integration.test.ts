@@ -238,52 +238,69 @@ describe("Prisma public directory repository", () => {
   });
 
   it("applies directory-specific filters and stable page ordering", async () => {
-    for (const label of ["stable-a", "stable-b"]) {
-      const extraAccount = await account("TEACHER", label);
-      const profile = await prisma.teacherProfile.create({ data: {
-        accountId: extraAccount.id,
-        displayName: `稳定分页-${label}`,
-        identityType: "FULL_TIME_TEACHER",
-        headline: "稳定分页测试",
-        bio: "公开教学简介",
-        yearsExperience: 3,
-        hourlyRate: 100,
-        hourlyRateMax: 180,
-        isOnline: true,
-        status: "PUBLISHED",
-        publishedAt: new Date("2026-07-01T08:00:00.000Z"),
-      } });
-      await prisma.teacherSubject.create({ data: {
-        teacherProfileId: profile.id, subjectId: activeSubjectId,
-      } });
-      await prisma.teacherServiceArea.create({ data: {
-        teacherProfileId: profile.id, regionId: activeRegionId, isPrimary: true,
-      } });
+    const transientAccountIds: string[] = [];
+    try {
+      for (const label of ["stable-a", "stable-b"]) {
+        const extraAccount = await account("TEACHER", label);
+        transientAccountIds.push(extraAccount.id);
+        const profile = await prisma.teacherProfile.create({ data: {
+          accountId: extraAccount.id,
+          displayName: `稳定分页-${label}`,
+          identityType: "FULL_TIME_TEACHER",
+          headline: "稳定分页测试",
+          bio: "公开教学简介",
+          yearsExperience: 3,
+          hourlyRate: 100,
+          hourlyRateMax: 180,
+          isOnline: true,
+          status: "PUBLISHED",
+          publishedAt: new Date("2026-07-01T08:00:00.000Z"),
+        } });
+        await prisma.teacherSubject.create({ data: {
+          teacherProfileId: profile.id, subjectId: activeSubjectId,
+        } });
+        await prisma.teacherServiceArea.create({ data: {
+          teacherProfileId: profile.id, regionId: activeRegionId, isPrimary: true,
+        } });
+      }
+      const identity = await repository.listTeachers({
+        identityType: "FULL_TIME_TEACHER", page: 1, pageSize: 12,
+      });
+      const online = await repository.listTeachers({ mode: "ONLINE", page: 1, pageSize: 12 });
+      const offlineMiss = await repository.listTeachers({ mode: "OFFLINE", district: crypto.randomUUID(), page: 1, pageSize: 12 });
+      const teacherBudget = await repository.listTeachers({ budgetMin: 12000, budgetMax: 13000, page: 1, pageSize: 12 });
+      const requestBudget = await repository.listRequests({ budgetMin: 12000, budgetMax: 13000, page: 1, pageSize: 12 });
+      const requestFilters = await repository.listRequests({
+        district: activeRegionId, subject: activeSubjectId, mode: "OFFLINE", page: 1, pageSize: 12,
+      });
+
+      expect(identity.items.map(({ id }) => id)).toContain(visibleTeacherId);
+      expect(online.items.map(({ id }) => id)).toContain(visibleTeacherId);
+      expect(offlineMiss.items).toHaveLength(0);
+      expect(teacherBudget.items.map(({ id }) => id)).toContain(visibleTeacherId);
+      expect(requestBudget.items.map(({ id }) => id)).toContain(visibleRequestId);
+      expect(requestFilters.items.map(({ id }) => id)).toContain(visibleRequestId);
+
+      const first = await repository.listTeachers({ page: 1, pageSize: 1 });
+      const second = await repository.listTeachers({ page: 2, pageSize: 1 });
+      const third = await repository.listTeachers({ page: 3, pageSize: 1 });
+      const repeated = await repository.listTeachers({ page: 1, pageSize: 1 });
+      expect(new Set([...first.items, ...second.items, ...third.items].map(({ id }) => id)).size).toBe(3);
+      expect(repeated.items.map(({ id }) => id)).toEqual(first.items.map(({ id }) => id));
+    } finally {
+      if (transientAccountIds.length) {
+        const deleted = await prisma.account.deleteMany({
+          where: { id: { in: transientAccountIds } },
+        });
+        if (deleted.count !== transientAccountIds.length) {
+          throw new Error("failed to clean every transient pagination account");
+        }
+        const transientIds = new Set(transientAccountIds);
+        for (let index = accountIds.length - 1; index >= 0; index -= 1) {
+          if (transientIds.has(accountIds[index])) accountIds.splice(index, 1);
+        }
+      }
     }
-    const identity = await repository.listTeachers({
-      identityType: "FULL_TIME_TEACHER", page: 1, pageSize: 12,
-    });
-    const online = await repository.listTeachers({ mode: "ONLINE", page: 1, pageSize: 12 });
-    const offlineMiss = await repository.listTeachers({ mode: "OFFLINE", district: crypto.randomUUID(), page: 1, pageSize: 12 });
-    const teacherBudget = await repository.listTeachers({ budgetMin: 12000, budgetMax: 13000, page: 1, pageSize: 12 });
-    const requestBudget = await repository.listRequests({ budgetMin: 12000, budgetMax: 13000, page: 1, pageSize: 12 });
-    const requestFilters = await repository.listRequests({
-      district: activeRegionId, subject: activeSubjectId, mode: "OFFLINE", page: 1, pageSize: 12,
-    });
-
-    expect(identity.items.map(({ id }) => id)).toContain(visibleTeacherId);
-    expect(online.items.map(({ id }) => id)).toContain(visibleTeacherId);
-    expect(offlineMiss.items).toHaveLength(0);
-    expect(teacherBudget.items.map(({ id }) => id)).toContain(visibleTeacherId);
-    expect(requestBudget.items.map(({ id }) => id)).toContain(visibleRequestId);
-    expect(requestFilters.items.map(({ id }) => id)).toContain(visibleRequestId);
-
-    const first = await repository.listTeachers({ page: 1, pageSize: 1 });
-    const second = await repository.listTeachers({ page: 2, pageSize: 1 });
-    const third = await repository.listTeachers({ page: 3, pageSize: 1 });
-    const repeated = await repository.listTeachers({ page: 1, pageSize: 1 });
-    expect(new Set([...first.items, ...second.items, ...third.items].map(({ id }) => id)).size).toBe(3);
-    expect(repeated.items.map(({ id }) => id)).toEqual(first.items.map(({ id }) => id));
   });
 
   it("returns null for missing or non-public details and detailed safe DTOs for public records", async () => {
