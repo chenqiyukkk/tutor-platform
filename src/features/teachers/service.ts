@@ -123,10 +123,44 @@ export function calculateProfileCompletion(profile: TeacherProfile) {
   };
 }
 
-function publicationFieldErrors(profile: TeacherProfile) {
+export function validatePublishable(profile: TeacherProfile) {
   const errors: Record<string, string[]> = {};
   for (const [field, label, isComplete] of completionItems) {
     if (!isComplete(profile)) errors[field] = [`请完善${label}`];
+  }
+  if (profile.publicNickname.length > 40) {
+    errors.publicNickname = ["公开昵称不能超过 40 个字符"];
+  }
+  if ((profile.bio?.length ?? 0) > 2_000) {
+    errors.bio = ["个人简介不能超过 2000 个字符"];
+  }
+  if (
+    profile.yearsExperience !== null &&
+    (!Number.isInteger(profile.yearsExperience) || profile.yearsExperience < 0 || profile.yearsExperience > 80)
+  ) {
+    errors.yearsExperience = ["教学年限必须是 0 到 80 的整数"];
+  }
+  if (
+    profile.rateMinCents !== null &&
+    (profile.rateMinCents < 0 || profile.rateMinCents > 100_000)
+  ) {
+    errors.rateMinCents = ["最低价格必须在 0 到 1000 元/小时之间"];
+  }
+  if (
+    profile.rateMaxCents !== null &&
+    (profile.rateMaxCents < 0 || profile.rateMaxCents > 100_000)
+  ) {
+    errors.rateMaxCents = ["最高价格必须在 0 到 1000 元/小时之间"];
+  }
+  if (
+    profile.rateMinCents !== null &&
+    profile.rateMaxCents !== null &&
+    profile.rateMinCents > profile.rateMaxCents
+  ) {
+    errors.rateMaxCents = ["最高价格不能低于最低价格"];
+  }
+  if (profile.extraRegions.length > 4) {
+    errors.extraRegionIds = ["额外授课地区最多选择 4 个"];
   }
   return errors;
 }
@@ -156,7 +190,7 @@ export function createTeacherProfileService(repository: TeacherProfileRepository
 
     async publish(account: Caller) {
       const profile = await findRequired(account);
-      const fieldErrors = publicationFieldErrors(profile);
+      const fieldErrors = validatePublishable(profile);
       if (Object.keys(fieldErrors).length) {
         throw new TeacherProfileError(
           "INCOMPLETE_PROFILE",

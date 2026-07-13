@@ -4,6 +4,7 @@ import { Prisma, type PrismaClient } from "@prisma/client";
 
 import {
   TeacherProfileError,
+  validatePublishable,
   type SavedTeacherProfile,
   type TeacherProfile,
   type TeacherProfileRepository,
@@ -153,9 +154,23 @@ export class PrismaTeacherProfileRepository implements TeacherProfileRepository 
 
   async setPublished(accountId: string, published: boolean) {
     return this.prisma.$transaction(async (transaction) => {
+      await transaction.$queryRaw<Array<{ id: string }>>`
+        SELECT "id"
+        FROM "TeacherProfile"
+        WHERE "accountId" = ${accountId}::uuid
+        FOR UPDATE
+      `;
       const current = await findOwned(transaction, accountId);
       if (!current) throw new TeacherProfileError("NOT_FOUND", "教师资料不存在");
       if (published) {
+        const fieldErrors = validatePublishable(toProfile(current));
+        if (Object.keys(fieldErrors).length) {
+          throw new TeacherProfileError(
+            "INCOMPLETE_PROFILE",
+            "请先完善教师资料再发布",
+            fieldErrors,
+          );
+        }
         if (!current.subjects.length || current.subjects.some(({ subject }) => !subject.isActive)) {
           throw new TeacherProfileError("INVALID_SUBJECT", "授课科目无效或已停用", {
             subjectIds: ["请选择有效且启用的授课科目"],

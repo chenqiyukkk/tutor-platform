@@ -30,7 +30,7 @@ async function fetchRegionsFromApi(
 
 type RegionPickerProps = {
   fetchRegions?: FetchRegions;
-  onChange: (districtId: string | null) => void;
+  onChange: (districtId: string | null, district?: RegionDto) => void;
 };
 
 export function RegionPicker({
@@ -134,7 +134,10 @@ export function RegionPicker({
 
   function changeDistrict(nextDistrictId: string) {
     setDistrictId(nextDistrictId);
-    onChange(nextDistrictId || null);
+    onChange(
+      nextDistrictId || null,
+      districts.find((district) => district.id === nextDistrictId),
+    );
   }
 
   const loadingText = loadingLevel === 1

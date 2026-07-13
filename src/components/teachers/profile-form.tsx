@@ -1,8 +1,9 @@
 "use client";
 
-import { useMemo, useState } from "react";
+import { useState } from "react";
 
 import { RegionPicker } from "@/components/forms/region-picker";
+import type { RegionDto } from "@/features/regions/schema";
 import type { TeacherIdentityType } from "@/features/teachers/schema";
 import type { TeacherProfile } from "@/features/teachers/service";
 
@@ -59,10 +60,19 @@ export function ProfileForm({
   const [busy, setBusy] = useState(false);
   const [showPreview, setShowPreview] = useState(false);
 
-  const regionNames = useMemo(() => new Map([
+  const [regionNames, setRegionNames] = useState(() => new Map([
     ...(initialProfile?.primaryRegion ? [[initialProfile.primaryRegion.id, initialProfile.primaryRegion.name] as const] : []),
     ...(initialProfile?.extraRegions.map(({ id, name }) => [id, name] as const) ?? []),
-  ]), [initialProfile]);
+  ]));
+
+  function rememberRegion(region?: RegionDto) {
+    if (!region) return;
+    setRegionNames((current) => {
+      const next = new Map(current);
+      next.set(region.id, region.name);
+      return next;
+    });
+  }
 
   const previewProfile: TeacherProfile = {
     id: savedProfile?.id ?? "preview",
@@ -105,8 +115,14 @@ export function ProfileForm({
         return null;
       }
       setSavedProfile(payload.profile);
+      const saved = payload.profile as TeacherProfile;
+      setRegionNames((current) => new Map([
+        ...current,
+        ...(saved.primaryRegion ? [[saved.primaryRegion.id, saved.primaryRegion.name] as const] : []),
+        ...saved.extraRegions.map(({ id, name }) => [id, name] as const),
+      ]));
       setNotice(successMessage);
-      return payload.profile as TeacherProfile;
+      return saved;
     } catch {
       setNotice("网络连接异常，请稍后重试");
       return null;
@@ -207,13 +223,19 @@ export function ProfileForm({
         <section className="profile-form-section">
           <div className="profile-form-section__title"><span>03</span><div><h2>授课地区</h2><p>选择一个主地区，可再添加最多四个额外区县。</p></div></div>
           {values.primaryRegionId ? <p className="selected-region">主地区：<strong>{regionNames.get(values.primaryRegionId) ?? "新选择区县"}</strong><button type="button" onClick={() => setValues({ ...values, primaryRegionId: null })}>移除</button></p> : null}
-          <RegionPicker onChange={(primaryRegionId) => setValues({ ...values, primaryRegionId })} />
+          <RegionPicker onChange={(primaryRegionId, region) => {
+            rememberRegion(region);
+            setValues({ ...values, primaryRegionId });
+          }} />
           {errorFor("primaryRegionId")}
           <div className="extra-regions">
             <h3>额外地区 <span>{values.extraRegionIds.length}/4</span></h3>
             {values.extraRegionIds.map((id) => <p className="selected-region" key={id}>{regionNames.get(id) ?? "新选择区县"}<button type="button" onClick={() => setValues({ ...values, extraRegionIds: values.extraRegionIds.filter((regionId) => regionId !== id) })}>移除</button></p>)}
-            {values.extraRegionIds.length < 4 ? <RegionPicker onChange={(id) => {
-              if (id && id !== values.primaryRegionId && !values.extraRegionIds.includes(id)) setValues({ ...values, extraRegionIds: [...values.extraRegionIds, id] });
+            {values.extraRegionIds.length < 4 ? <RegionPicker onChange={(id, region) => {
+              if (id && id !== values.primaryRegionId && !values.extraRegionIds.includes(id)) {
+                rememberRegion(region);
+                setValues({ ...values, extraRegionIds: [...values.extraRegionIds, id] });
+              }
             }} /> : null}
             {errorFor("extraRegionIds")}
           </div>

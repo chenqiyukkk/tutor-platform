@@ -99,4 +99,35 @@ describe("/api/teacher/profile handlers", () => {
     expect((await unauthorized.handlers.GET(new Request("http://localhost/api/teacher/profile"))).status)
       .toBe(401);
   });
+
+  it.each([
+    ["GET", undefined],
+    ["PUT", undefined],
+    ["PATCH", undefined],
+    ["POST publish", undefined],
+    ["POST unpublish", undefined],
+    ["GET", "parent-token"],
+    ["PUT", "parent-token"],
+    ["PATCH", "parent-token"],
+    ["POST publish", "parent-token"],
+    ["POST unpublish", "parent-token"],
+  ])("rejects %s for missing or non-teacher session before profile access", async (operation, token) => {
+    const guarded = setup();
+    guarded.authenticate.mockRejectedValue(new AuthError("UNAUTHORIZED", "登录状态无效或已过期"));
+    const method = operation.split(" ")[0] as "GET" | "PUT" | "PATCH" | "POST";
+    const action = operation.split(" ")[1];
+    const request = new Request("http://localhost/api/teacher/profile", {
+      method,
+      headers: token ? { cookie: `tutor_teacher_session=${token}` } : undefined,
+      body: method === "GET" ? undefined : JSON.stringify(method === "POST" ? { action } : {}),
+    });
+
+    const response = await guarded.handlers[method](request);
+    expect(response.status).toBe(401);
+    expect(guarded.authenticate).toHaveBeenCalledWith(token);
+    expect(guarded.service.get).not.toHaveBeenCalled();
+    expect(guarded.service.saveDraft).not.toHaveBeenCalled();
+    expect(guarded.service.publish).not.toHaveBeenCalled();
+    expect(guarded.service.unpublish).not.toHaveBeenCalled();
+  });
 });

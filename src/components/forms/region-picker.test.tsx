@@ -38,7 +38,7 @@ describe("RegionPicker", () => {
     await userEvent.selectOptions(await screen.findByLabelText("城市"), cityOne.id);
     await userEvent.selectOptions(await screen.findByLabelText("区县"), district.id);
 
-    expect(onChange).toHaveBeenLastCalledWith(district.id);
+    expect(onChange).toHaveBeenLastCalledWith(district.id, district);
     expect(screen.getByLabelText("区县")).toHaveDisplayValue("天河区");
 
     await userEvent.selectOptions(screen.getByLabelText("城市"), cityTwo.id);
