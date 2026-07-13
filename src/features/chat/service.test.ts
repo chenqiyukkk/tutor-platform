@@ -25,14 +25,16 @@ const validConversationRow = {
   contextValid: true,
 };
 
-function initialReadDb(findMany: () => Promise<never[]>, events: string[]) {
+function initialReadDb(findMany: () => Promise<unknown[]>, events: string[]) {
   const transaction = {
     account: { findFirst: vi.fn(async () => { events.push("actor"); return { id: parentId }; }) },
     message: { findMany },
     $queryRaw: vi.fn(async () => {
-      const event = transaction.$queryRaw.mock.calls.length === 1 ? "lock" : "context";
+      const event = ["lock", "context", "watermark"][transaction.$queryRaw.mock.calls.length - 1];
       events.push(event);
-      return event === "lock" ? [] : [validConversationRow];
+      if (event === "lock") return [];
+      if (event === "context") return [validConversationRow];
+      return [{ changeVersion: BigInt(42) }];
     }),
   };
   return {
@@ -65,25 +67,33 @@ describe("chat service input boundary", () => {
     })).rejects.toThrow();
   });
 
-  it("uses Epoch plus nil UUID for an empty history while establishing the change watermark under the pair lock", async () => {
+  it("uses Epoch plus nil UUID for an empty history while allocating a sequence watermark under the pair lock", async () => {
     const events: string[] = [];
-    const fixedNow = new Date("2026-07-13T12:00:00.000Z");
     const findMany = vi.fn(async () => { events.push("findMany"); return []; });
-    const now = vi.fn(() => { events.push("now"); return fixedNow; });
-    const service = createChatService(initialReadDb(findMany, events) as never, now);
+    const service = createChatService(initialReadDb(findMany, events) as never);
 
     const page = await service.listMessages({ id: parentId, role: "parent" }, conversationId, {});
 
-    expect(events).toEqual(["pair", "lock", "actor", "context", "now", "findMany"]);
+    expect(events).toEqual(["pair", "lock", "actor", "context", "watermark", "findMany"]);
     expect(page.nextAfterCursor).toBe(encodeMessageCursor({ sentAt: new Date(0), id: nilId }));
-    expect(page.nextChangesCursor).toBe(encodeMessageChangeCursor({ updatedAt: fixedNow, id: nilId }));
+    expect(page.nextChangesCursor).toBe("42");
   });
 
   it("loads actor, relational context and message changes in about three SQL operations", async () => {
-    const updatedAt = new Date("2026-07-13T12:00:00.000Z");
     const findFirst = vi.fn(async () => ({ id: parentId }));
     const relationQuery = vi.fn(async () => [validConversationRow]);
-    const findMany = vi.fn(async () => []);
+    const findMany = vi.fn(async () => [{
+      id: clientMessageId,
+      clientMessageId,
+      body: "版本轮询",
+      senderAccountId: teacherId,
+      sentAt: new Date("2026-07-13T12:00:00.000Z"),
+      readAt: null,
+      editedAt: null,
+      deletedAt: null,
+      updatedAt: new Date("2026-07-13T12:00:00.000Z"),
+      changeVersion: BigInt(42),
+    }]);
     const db = {
       account: { findFirst },
       message: { findMany },
@@ -91,13 +101,20 @@ describe("chat service input boundary", () => {
     };
     const service = createChatService(db as never);
 
-    await service.listMessages({ id: parentId, role: "parent" }, conversationId, {
-      changesAfter: encodeMessageChangeCursor({ updatedAt, id: nilId }),
+    const page = await service.listMessages({ id: parentId, role: "parent" }, conversationId, {
+      changesAfter: encodeMessageChangeCursor({ changeVersion: BigInt(41) }),
     });
 
     expect(findFirst).toHaveBeenCalledOnce();
     expect(relationQuery).toHaveBeenCalledOnce();
     expect(findMany).toHaveBeenCalledOnce();
+    expect(findMany).toHaveBeenCalledWith(expect.objectContaining({
+      where: { conversationId, changeVersion: { gt: BigInt(41) } },
+      orderBy: { changeVersion: "asc" },
+      take: 51,
+    }));
+    expect(page.nextChangesCursor).toBe("42");
+    expect(JSON.stringify(page)).not.toContain("changeVersion");
     expect(findFirst.mock.calls.length + relationQuery.mock.calls.length + findMany.mock.calls.length).toBeLessThanOrEqual(3);
     expect((db as Record<string, unknown>).greeting).toBeUndefined();
     expect((db as Record<string, unknown>).tutoringRequest).toBeUndefined();

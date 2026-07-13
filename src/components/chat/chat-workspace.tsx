@@ -84,7 +84,10 @@ export function ChatWorkspace({ realm }: { realm: ChatRealm }) {
   const focusIntent = useRef<"list" | "thread" | null>(null);
   const restoreBlockFocus = useRef(false);
   const conversationGeneration = useRef(0);
-  const loadedConversationPages = useRef(false);
+  const conversationFirstPageCursor = useRef<string | null>(null);
+  const conversationLoadedPageCount = useRef(1);
+  const conversationPaginationDirty = useRef(false);
+  const conversationPaginationRevision = useRef(0);
   const conversationPageController = useRef<AbortController | null>(null);
   const threadGeneration = useRef(0);
   const historyController = useRef<AbortController | null>(null);
@@ -104,7 +107,9 @@ export function ChatWorkspace({ realm }: { realm: ChatRealm }) {
   useEffect(() => {
     const generation = ++conversationGeneration.current;
     conversationPageController.current?.abort();
-    loadedConversationPages.current = false;
+    conversationLoadedPageCount.current = 1;
+    conversationPaginationDirty.current = false;
+    conversationPaginationRevision.current += 1;
     const controller = new AbortController();
     void fetch(`/api/conversations?realm=${realm}&limit=100`, {
       cache: "no-store",
@@ -112,6 +117,7 @@ export function ChatWorkspace({ realm }: { realm: ChatRealm }) {
     }).then(responseJson<ConversationPage>).then((page) => {
       if (generation !== conversationGeneration.current) return;
       const sorted = sortConversations(page.items);
+      conversationFirstPageCursor.current = page.nextCursor;
       setConversations(sorted);
       setConversationNextCursor(page.nextCursor);
       setLoadingMoreConversations(false);
@@ -140,7 +146,15 @@ export function ChatWorkspace({ realm }: { realm: ChatRealm }) {
     const page = await responseJson<ConversationPage>(response);
     if (generation !== conversationGeneration.current) return { hasMore: false };
     setConversations((current) => mergeConversations(current, page.items));
-    if (!loadedConversationPages.current) setConversationNextCursor(page.nextCursor);
+    const boundaryChanged = conversationFirstPageCursor.current !== page.nextCursor;
+    conversationFirstPageCursor.current = page.nextCursor;
+    if (conversationLoadedPageCount.current === 1) {
+      setConversationNextCursor(page.nextCursor);
+    } else if (boundaryChanged) {
+      conversationPaginationDirty.current = true;
+      conversationPaginationRevision.current += 1;
+      setConversationNextCursor(page.nextCursor);
+    }
     return { hasMore: false };
   }, [realm]);
 
@@ -305,20 +319,36 @@ export function ChatWorkspace({ realm }: { realm: ChatRealm }) {
     if (!conversationNextCursor || loadingMoreConversations) return;
     const cursor = conversationNextCursor;
     const generation = conversationGeneration.current;
+    const revision = conversationPaginationRevision.current;
+    const rebuild = conversationPaginationDirty.current;
+    const targetPageCount = conversationLoadedPageCount.current + 1;
     const controller = new AbortController();
     conversationPageController.current?.abort();
     conversationPageController.current = controller;
     setLoadingMoreConversations(true);
     try {
-      const response = await fetch(
-        `/api/conversations?realm=${realm}&limit=100&cursor=${encodeURIComponent(cursor)}`,
-        { cache: "no-store", signal: controller.signal },
-      );
-      const page = await responseJson<ConversationPage>(response);
-      if (generation !== conversationGeneration.current) return;
-      loadedConversationPages.current = true;
-      setConversations((current) => mergeConversations(current, page.items));
-      setConversationNextCursor(page.nextCursor);
+      let nextCursor: string | null = rebuild ? conversationFirstPageCursor.current : cursor;
+      const incoming: ConversationItem[] = [];
+      let loadedPageCount = rebuild ? 1 : conversationLoadedPageCount.current;
+      const pagesToFetch = rebuild ? targetPageCount - 1 : 1;
+      for (let pageIndex = 0; pageIndex < pagesToFetch && nextCursor; pageIndex += 1) {
+        const response = await fetch(
+          `/api/conversations?realm=${realm}&limit=100&cursor=${encodeURIComponent(nextCursor)}`,
+          { cache: "no-store", signal: controller.signal },
+        );
+        const page = await responseJson<ConversationPage>(response);
+        incoming.push(...page.items);
+        nextCursor = page.nextCursor;
+        loadedPageCount += 1;
+      }
+      if (
+        generation !== conversationGeneration.current
+        || revision !== conversationPaginationRevision.current
+      ) return;
+      conversationLoadedPageCount.current = loadedPageCount;
+      conversationPaginationDirty.current = false;
+      setConversations((current) => mergeConversations(current, incoming));
+      setConversationNextCursor(nextCursor);
     } catch (error) {
       if (generation !== conversationGeneration.current || isAbortError(error)) return;
     } finally {
@@ -502,14 +532,13 @@ export function ChatWorkspace({ realm }: { realm: ChatRealm }) {
                   disabled={threadState !== "ready" || selectedConversation.blocked}
                   onSend={(body) => { void sendMessage(crypto.randomUUID(), body, true); }}
                 />
-                {blockDialogOpen ? (
-                  <BlockConversationDialog
-                    busy={blockBusy}
-                    error={blockError}
-                    onCancel={closeBlockDialog}
-                    onConfirm={(reason) => { void blockConversation(reason); }}
-                  />
-                ) : null}
+                <BlockConversationDialog
+                  busy={blockBusy}
+                  error={blockError}
+                  onClose={closeBlockDialog}
+                  onConfirm={(reason) => { void blockConversation(reason); }}
+                  open={blockDialogOpen}
+                />
               </>
             ) : (
               <div className="chat-correspondence__empty">

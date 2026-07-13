@@ -32,6 +32,7 @@ const MIGRATIONS = [
   "20260713133500_public_content_safety_version",
   "20260713133600_chat_polling_indexes",
   "20260713133700_chat_message_change_polling",
+  "20260713133800_chat_message_change_version",
 ] as const;
 const WORKFLOW_MIGRATION = "20260713133000_greeting_workflow";
 const PUBLIC_SAFETY_MIGRATION = "20260713133400_public_content_safety";
@@ -190,7 +191,7 @@ describe("greeting workflow migration upgrades", () => {
     expect(isSafeMigrationWorkspace(join(tmpdir(), "another-project", "run-example"))).toBe(false);
   });
 
-  it("deploys all 16 migrations into an empty database including real chat polling indexes", async () => {
+  it("deploys all 17 migrations into an empty database including commit-ordered message versions", async () => {
     const database = await createDatabase();
     const root = createMigrationWorkspace(MIGRATIONS.length);
     const client = new Client({ connectionString: database.url });
@@ -198,7 +199,7 @@ describe("greeting workflow migration upgrades", () => {
       expectPrismaSuccess(runPrisma(root, database.url, ["migrate", "deploy"]));
       await client.connect();
       const applied = await client.query(`SELECT count(*)::int AS count FROM "_prisma_migrations" WHERE finished_at IS NOT NULL AND rolled_back_at IS NULL`);
-      expect(applied.rows[0].count).toBe(16);
+      expect(applied.rows[0].count).toBe(17);
       const chatIndexes = await client.query<{ indexname: string; indexdef: string }>(`
         SELECT indexname, indexdef
         FROM pg_indexes
@@ -210,17 +211,45 @@ describe("greeting workflow migration upgrades", () => {
         "Conversation_teacherId_activityAt_id_idx",
         "Message_conversationId_sentAt_id_idx",
         "Message_conversationId_unread_sender_idx",
-        "Message_conversationId_updatedAt_id_idx",
+        "Message_conversationId_changeVersion_idx",
       ]]);
       expect(chatIndexes.rows.map(({ indexname }) => indexname)).toEqual([
         "Conversation_parentId_activityAt_id_idx",
         "Conversation_teacherId_activityAt_id_idx",
+        "Message_conversationId_changeVersion_idx",
         "Message_conversationId_sentAt_id_idx",
         "Message_conversationId_unread_sender_idx",
-        "Message_conversationId_updatedAt_id_idx",
       ]);
       expect(chatIndexes.rows.find(({ indexname }) => indexname.includes("activityAt"))?.indexdef).toContain("COALESCE");
       expect(chatIndexes.rows.find(({ indexname }) => indexname.includes("unread"))?.indexdef).toContain('WHERE ("readAt" IS NULL)');
+      const messageVersion = await client.query<{
+        data_type: string;
+        is_nullable: string;
+      }>(`
+        SELECT data_type, is_nullable
+        FROM information_schema.columns
+        WHERE table_schema = 'public' AND table_name = 'Message' AND column_name = 'changeVersion'
+      `);
+      expect(messageVersion.rows).toEqual([{ data_type: "bigint", is_nullable: "NO" }]);
+      const versionObjects = await client.query<{ sequence_name: string; trigger_name: string }>(`
+        SELECT DISTINCT sequence.sequence_name, trigger.trigger_name
+        FROM information_schema.sequences AS sequence
+        CROSS JOIN information_schema.triggers AS trigger
+        WHERE sequence.sequence_schema = 'public'
+          AND sequence.sequence_name = 'Message_changeVersion_seq'
+          AND trigger.event_object_schema = 'public'
+          AND trigger.event_object_table = 'Message'
+          AND trigger.trigger_name = 'Message_assign_change_version'
+      `);
+      expect(versionObjects.rows).toEqual([{
+        sequence_name: "Message_changeVersion_seq",
+        trigger_name: "Message_assign_change_version",
+      }]);
+      const oldMessageIndexes = await client.query<{ indexname: string }>(`
+        SELECT indexname FROM pg_indexes
+        WHERE schemaname = 'public' AND indexname = 'Message_conversationId_updatedAt_id_idx'
+      `);
+      expect(oldMessageIndexes.rows).toEqual([]);
       const oldConversationIndexes = await client.query<{ indexname: string }>(`
         SELECT indexname FROM pg_indexes
         WHERE schemaname = 'public'
@@ -390,6 +419,11 @@ describe("greeting workflow migration upgrades", () => {
       expectPrismaSuccess(runPrisma(root, database.url, ["migrate", "deploy"]));
       await client.connect();
       const seed = await seedLegacy(client);
+      const messageId = randomUUID();
+      await client.query(`
+        INSERT INTO "Message" ("id","conversationId","senderAccountId","clientMessageId","body","sentAt")
+        VALUES ($1,$2,$3,$4,'Legacy message',$5)
+      `, [messageId, seed.conversationId, seed.teacherId, randomUUID(), new Date("2026-07-01T12:01:00.000Z")]);
       copyMigrations(root, MIGRATIONS.length);
       expectPrismaSuccess(runPrisma(root, database.url, ["migrate", "deploy"]));
 
@@ -403,6 +437,8 @@ describe("greeting workflow migration upgrades", () => {
       });
       const conversation = await client.query(`SELECT "tutoringRequestId" FROM "Conversation" WHERE id = $1`, [seed.conversationId]);
       expect(conversation.rows[0].tutoringRequestId).toBe(seed.requestId);
+      const message = await client.query(`SELECT "changeVersion" FROM "Message" WHERE id = $1`, [messageId]);
+      expect(BigInt(message.rows[0].changeVersion)).toBeGreaterThan(BigInt(0));
     } finally {
       await client.end().catch(() => undefined);
       await cleanupMigrationWorkspace(root);

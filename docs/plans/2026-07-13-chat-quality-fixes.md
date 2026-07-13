@@ -7,6 +7,8 @@
 
 后端继续以 PostgreSQL + Prisma 为唯一事实源。所有会改变双方消息可见状态的写操作都在 canonical account-pair lock 内完成；历史分页保留 `sentAt,id` 游标，状态变更轮询新增 `updatedAt,id` 游标。聊天页面分别运行消息变更轮询和会话列表轮询，两者都遵守可见性、AbortController、generation 与指数退避规则。
 
+> 后续修订：`20260713133800_chat_message_change_version` 已用 trigger 内 pair lock 后分配的 `BIGINT changeVersion` 取代本计划中的 `updatedAt,id` 状态游标；最终契约以 `2026-07-13-chat-design.md` 和 `2026-07-13-chat-change-version-plan.md` 为准。
+
 ## 提交一：数据库、service 与 API
 
 ### RED

@@ -1206,8 +1206,9 @@ h3 {
 .chat-thread__header .text-button[aria-disabled="true"] { cursor: default; opacity: .62; }
 .chat-thread__back { display: none; min-height: 44px; padding: 0; border: 0; background: transparent; color: var(--color-vermilion-dark); font-weight: 800; cursor: pointer; }
 .chat-thread__paper { min-height: 0; padding: var(--space-5); overflow-y: auto; overscroll-behavior: contain; }
-.chat-block-dialog { position: fixed; z-index: 50; inset: 0; display: grid; padding: var(--space-4); background: rgb(24 37 31 / 48%); place-items: center; }
-.chat-block-dialog form { display: grid; width: min(520px, 100%); padding: var(--space-6); border: 1px solid var(--color-line-dark); background: var(--color-paper-light); box-shadow: var(--shadow-paper); gap: var(--space-4); }
+.chat-block-dialog { width: min(520px, calc(100% - 2 * var(--space-4))); max-width: none; padding: 0; border: 0; background: transparent; color: var(--color-ink); }
+.chat-block-dialog::backdrop { background: rgb(24 37 31 / 48%); }
+.chat-block-dialog form { display: grid; width: 100%; padding: var(--space-6); border: 1px solid var(--color-line-dark); background: var(--color-paper-light); box-shadow: var(--shadow-paper); gap: var(--space-4); }
 .chat-block-dialog h2, .chat-block-dialog p { margin: 0; }
 .chat-block-dialog label { display: grid; color: var(--color-ink); font-weight: 800; gap: var(--space-2); }
 .chat-block-dialog textarea { width: 100%; padding: var(--space-3); border: 1px solid var(--color-line-dark); background: var(--color-white); color: var(--color-ink); resize: vertical; }

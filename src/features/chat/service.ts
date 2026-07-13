@@ -123,13 +123,10 @@ async function queryMessagePage(
     const rows = await client.message.findMany({
       where: {
         conversationId,
-        OR: [
-          { updatedAt: { gt: cursor.updatedAt } },
-          { updatedAt: cursor.updatedAt, id: { gt: cursor.id } },
-        ],
+        changeVersion: { gt: cursor.changeVersion },
       },
       select: safeMessageSelect,
-      orderBy: [{ updatedAt: "asc" }, { id: "asc" }],
+      orderBy: { changeVersion: "asc" },
       take: query.limit + 1,
     });
     const hasMore = rows.length > query.limit;
@@ -141,7 +138,7 @@ async function queryMessagePage(
       nextBeforeCursor: null,
       nextAfterCursor: null,
       nextChangesCursor: last
-        ? encodeMessageChangeCursor({ updatedAt: last.updatedAt, id: last.id })
+        ? encodeMessageChangeCursor({ changeVersion: last.changeVersion })
         : query.changesAfter,
       hasMore,
     };
@@ -290,7 +287,10 @@ export function createChatService(prisma: PrismaClient, now: () => Date = () => 
         await assertActiveActor(transaction, actor);
         const conversation = await loadConversation(transaction, actor, conversationId);
         assertUnchangedPair(conversation, preliminary);
-        const nextChangesCursor = encodeMessageChangeCursor({ updatedAt: now(), id: nilUuid });
+        const [watermark] = await transaction.$queryRaw<Array<{ changeVersion: bigint }>>`
+          SELECT nextval('"Message_changeVersion_seq"')::bigint AS "changeVersion"
+        `;
+        const nextChangesCursor = encodeMessageChangeCursor({ changeVersion: watermark.changeVersion });
         return queryMessagePage(transaction, actor, conversationId, query, nextChangesCursor);
       }, { isolationLevel: "ReadCommitted" });
     },

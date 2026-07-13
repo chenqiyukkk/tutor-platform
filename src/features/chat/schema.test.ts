@@ -61,14 +61,18 @@ describe("chat message input", () => {
 describe("chat keyset queries", () => {
   it("round-trips canonical message and conversation cursors", () => {
     const sentAt = new Date("2026-07-13T08:00:00.123Z");
-    const updatedAt = new Date("2026-07-13T08:30:00.234Z");
     const activityAt = new Date("2026-07-13T09:00:00.456Z");
     const messageCursor = encodeMessageCursor({ sentAt, id });
-    const changeCursor = encodeMessageChangeCursor({ updatedAt, id });
+    const changeCursor = encodeMessageChangeCursor({ changeVersion: BigInt(42) });
     const conversationCursor = encodeConversationCursor({ activityAt, id });
 
     expect(decodeMessageCursor(messageCursor)).toEqual({ sentAt, id });
-    expect(decodeMessageChangeCursor(changeCursor)).toEqual({ updatedAt, id });
+    expect(changeCursor).toBe("42");
+    expect(decodeMessageChangeCursor(changeCursor)).toEqual({ changeVersion: BigInt(42) });
+    expect(encodeMessageChangeCursor({ changeVersion: BigInt(0) })).toBe("0");
+    expect(decodeMessageChangeCursor("9223372036854775807")).toEqual({
+      changeVersion: BigInt("9223372036854775807"),
+    });
     expect(decodeConversationCursor(conversationCursor)).toEqual({ activityAt, id });
     expect(messageListQuerySchema.parse({ before: messageCursor, limit: "100" })).toEqual({ before: messageCursor, limit: 100 });
     expect(messageListQuerySchema.parse({ after: messageCursor })).toEqual({ after: messageCursor, limit: 50 });
@@ -78,19 +82,29 @@ describe("chat keyset queries", () => {
 
   it("rejects noncanonical cursors, mixed directions, offsets, unknown fields, and limits above 100", () => {
     const cursor = encodeMessageCursor({ sentAt: new Date("2026-07-13T08:00:00.123Z"), id });
-    const changes = encodeMessageChangeCursor({ updatedAt: new Date("2026-07-13T08:00:00.123Z"), id });
+    const changes = encodeMessageChangeCursor({ changeVersion: BigInt(42) });
     for (const query of [
       { before: cursor, after: cursor },
       { before: cursor, changesAfter: changes },
       { after: cursor, changesAfter: changes },
       { before: cursor, after: cursor, changesAfter: changes },
       { before: "not+base64" },
-      { changesAfter: cursor },
       { page: 2 },
       { ownerAccountId: id },
       { limit: 101 },
     ]) expect(() => messageListQuerySchema.parse(query)).toThrow();
     expect(() => conversationListQuerySchema.parse({ limit: 101 })).toThrow();
     expect(() => conversationListQuerySchema.parse({ cursor: "not+base64" })).toThrow();
+    for (const changesAfter of [
+      "00",
+      "01",
+      "+1",
+      "-1",
+      " 1",
+      "1 ",
+      "1e3",
+      "9223372036854775808",
+      cursor,
+    ]) expect(() => messageListQuerySchema.parse({ changesAfter })).toThrow();
   });
 });

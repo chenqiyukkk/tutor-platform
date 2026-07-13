@@ -215,7 +215,7 @@ describe("chat polling indexes", () => {
 
   it("adds a forward-only message change watermark and removes superseded conversation indexes", () => {
     expect(schema).toMatch(/updatedAt\s+DateTime\s+@default\(now\(\)\)\s+@db\.Timestamptz\(3\)/);
-    expect(schema).toMatch(/@@index\(\[conversationId, updatedAt, id\]\)/);
+    expect(schema).not.toMatch(/@@index\(\[conversationId, updatedAt, id\]\)/);
     expect(schema).not.toMatch(/@@index\(\[teacherId, lastMessageAt\]\)/);
     expect(schema).not.toMatch(/@@index\(\[parentId, lastMessageAt\]\)/);
 
@@ -235,5 +235,33 @@ describe("chat polling indexes", () => {
     expect(sql).toContain('"Message_conversationId_updatedAt_id_idx"');
     expect(sql).toContain('DROP INDEX IF EXISTS "Conversation_teacherId_lastMessageAt_idx"');
     expect(sql).toContain('DROP INDEX IF EXISTS "Conversation_parentId_lastMessageAt_idx"');
+  });
+
+  it("versions every message mutation with the canonical pair lock before sequence allocation", () => {
+    expect(schema).toMatch(/changeVersion\s+BigInt\s+@default\(0\)/);
+    expect(schema).toMatch(/@@index\(\[conversationId, changeVersion\]\)/);
+    expect(schema).not.toMatch(/@@index\(\[conversationId, updatedAt, id\]\)/);
+
+    const versionMigration = readdirSync(migrationsDirectory, { withFileTypes: true }).find(
+      (entry) => entry.isDirectory() && entry.name === "20260713133800_chat_message_change_version",
+    );
+    expect(versionMigration).toBeDefined();
+    if (!versionMigration) return;
+    const sql = readFileSync(join(migrationsDirectory, versionMigration.name, "migration.sql"), "utf8");
+    expect(sql.trimStart().startsWith("BEGIN;")).toBe(true);
+    expect(sql.trimEnd().endsWith("COMMIT;")).toBe(true);
+    expect(sql).not.toContain('LOCK TABLE "Conversation"');
+    expect(sql).toContain('CREATE SEQUENCE "Message_changeVersion_seq"');
+    expect(sql).toContain('ADD COLUMN "changeVersion" BIGINT');
+    expect(sql).toContain('CREATE TRIGGER "Message_assign_change_version"');
+    expect(sql).toContain('BEFORE INSERT OR UPDATE ON "Message"');
+    expect(sql).toContain("greeting-pair:");
+    expect(sql).toContain("LEAST(conversation_record.\"teacherId\"::text, conversation_record.\"parentId\"::text)");
+    expect(sql).toContain("GREATEST(conversation_record.\"teacherId\"::text, conversation_record.\"parentId\"::text)");
+    expect(sql).toContain("pg_advisory_xact_lock(hashtextextended(pair_key, 0))");
+    expect(sql).toContain("nextval('\"Message_changeVersion_seq\"')");
+    expect(sql.indexOf("pg_advisory_xact_lock")).toBeLessThan(sql.indexOf("nextval"));
+    expect(sql).toContain('CREATE INDEX "Message_conversationId_changeVersion_idx"');
+    expect(sql).toContain('DROP INDEX "Message_conversationId_updatedAt_id_idx"');
   });
 });

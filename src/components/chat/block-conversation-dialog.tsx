@@ -5,29 +5,50 @@ import { useEffect, useRef, useState } from "react";
 export function BlockConversationDialog({
   busy,
   error,
-  onCancel,
+  onClose,
   onConfirm,
+  open,
 }: {
   busy: boolean;
   error: string | null;
-  onCancel(): void;
+  onClose(): void;
   onConfirm(reason: string): void;
+  open: boolean;
 }) {
   const [reason, setReason] = useState("");
   const input = useRef<HTMLTextAreaElement | null>(null);
+  const dialog = useRef<HTMLDialogElement | null>(null);
   const length = Array.from(reason.trim()).length;
   const valid = length >= 2 && length <= 200;
 
-  useEffect(() => { input.current?.focus(); }, []);
+  useEffect(() => {
+    const element = dialog.current;
+    if (!element) return;
+    if (open) {
+      if (!element.open) element.showModal();
+      input.current?.focus();
+    } else if (element.open) {
+      element.close();
+    }
+  }, [open]);
+
+  function close() {
+    if (!busy) dialog.current?.close();
+  }
+
   return (
-    <div
+    <dialog
       aria-labelledby="chat-block-title"
-      aria-modal="true"
       className="chat-block-dialog"
-      onKeyDown={(event) => {
-        if (event.key === "Escape" && !busy) onCancel();
+      onCancel={(event) => {
+        event.preventDefault();
+        close();
       }}
-      role="dialog"
+      onClose={() => {
+        setReason("");
+        onClose();
+      }}
+      ref={dialog}
     >
       <form onSubmit={(event) => {
         event.preventDefault();
@@ -47,12 +68,12 @@ export function BlockConversationDialog({
         </label>
         {error ? <p role="alert">{error}</p> : null}
         <div className="greeting-card__actions">
-          <button className="button button--outline" disabled={busy} onClick={onCancel} type="button">取消</button>
+          <button className="button button--outline" disabled={busy} onClick={close} type="button">取消</button>
           <button className="button button--primary" disabled={!valid || busy} type="submit">
             {busy ? "正在屏蔽…" : "确认屏蔽"}
           </button>
         </div>
       </form>
-    </div>
+    </dialog>
   );
 }

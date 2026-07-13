@@ -7,7 +7,7 @@ function encodeCursor(timestampKey: string, at: Date, id: string) {
   return Buffer.from(JSON.stringify({ [timestampKey]: at.toISOString(), id }), "utf8").toString("base64url");
 }
 
-function decodeCursor(value: string, timestampKey: "sentAt" | "updatedAt" | "activityAt") {
+function decodeCursor(value: string, timestampKey: "sentAt" | "activityAt") {
   if (value.length < 1 || value.length > 256 || !/^[A-Za-z0-9_-]+$/u.test(value)) throw new Error("invalid chat cursor");
   const decoded = Buffer.from(value, "base64url");
   if (decoded.toString("base64url") !== value) throw new Error("non-canonical chat cursor");
@@ -19,8 +19,9 @@ function decodeCursor(value: string, timestampKey: "sentAt" | "updatedAt" | "act
 }
 
 export type MessageCursor = { sentAt: Date; id: string };
-export type MessageChangeCursor = { updatedAt: Date; id: string };
+export type MessageChangeCursor = { changeVersion: bigint };
 export type ConversationCursor = { activityAt: Date; id: string };
+const maxPostgresBigInt = BigInt("9223372036854775807");
 
 export function encodeMessageCursor(cursor: MessageCursor) {
   return encodeCursor("sentAt", cursor.sentAt, cursor.id);
@@ -32,12 +33,17 @@ export function decodeMessageCursor(value: string): MessageCursor {
 }
 
 export function encodeMessageChangeCursor(cursor: MessageChangeCursor) {
-  return encodeCursor("updatedAt", cursor.updatedAt, cursor.id);
+  if (cursor.changeVersion < BigInt(0) || cursor.changeVersion > maxPostgresBigInt) {
+    throw new Error("invalid message change cursor");
+  }
+  return cursor.changeVersion.toString(10);
 }
 
 export function decodeMessageChangeCursor(value: string): MessageChangeCursor {
-  const decoded = decodeCursor(value, "updatedAt");
-  return { updatedAt: decoded.at, id: decoded.id };
+  if (!/^(?:0|[1-9][0-9]{0,18})$/u.test(value)) throw new Error("invalid message change cursor");
+  const changeVersion = BigInt(value);
+  if (changeVersion > maxPostgresBigInt) throw new Error("invalid message change cursor");
+  return { changeVersion };
 }
 
 export function encodeConversationCursor(cursor: ConversationCursor) {

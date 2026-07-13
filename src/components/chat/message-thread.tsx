@@ -70,7 +70,7 @@ export function MessageThread({
         </div>
       </header>
 
-      <div aria-live="polite" className="chat-thread__paper">
+      <div className="chat-thread__paper">
         {beforeCursor ? (
           <button
             className="chat-load-older"
@@ -98,7 +98,7 @@ export function MessageThread({
                   <p>{message.body}</p>
                   <footer>
                     <time dateTime={message.sentAt}>{timeLabel(message.sentAt)}</time>
-                    {message.delivery === "sending" ? <span role="status">发送中…</span> : null}
+                    {message.delivery === "sending" ? <span>发送中…</span> : null}
                     {message.delivery === "failed" ? (
                       <button
                         aria-label={`重试发送“${message.body}”`}

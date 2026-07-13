@@ -110,7 +110,10 @@ describe("ChatWorkspace", () => {
     expect(within(list).getByRole("button", { name: /陈家长.*2 条未读消息/ })).toHaveAttribute("aria-current", "true");
     expect(screen.getByRole("region", { name: "与陈家长的消息" })).toBeInTheDocument();
     expect(await screen.findByText("请先看看这道题")).toBeInTheDocument();
+    const messageRegion = screen.getByRole("region", { name: "与陈家长的消息" });
     expect(screen.getByRole("log", { name: "消息记录" })).toHaveAttribute("aria-live", "polite");
+    expect(messageRegion.querySelectorAll('[aria-live="polite"]')).toHaveLength(1);
+    expect(within(screen.getByRole("log", { name: "消息记录" })).queryByRole("status")).not.toBeInTheDocument();
     expect(screen.getByRole("button", { name: "加载更早消息" })).toBeInTheDocument();
     expect(screen.getByLabelText("消息内容")).toHaveAttribute("aria-describedby", "message-character-count");
     expect(screen.getByText("还可输入 1000 个字符")).toBeInTheDocument();
@@ -192,6 +195,50 @@ describe("ChatWorkspace", () => {
       "/api/conversations?realm=teacher&limit=100&cursor=page-2",
       expect.objectContaining({ cache: "no-store", signal: expect.any(AbortSignal) }),
     );
+  });
+
+  it("rebuilds loaded conversation pages from a changed first-page boundary before extending pagination", async () => {
+    vi.useFakeTimers();
+    vi.spyOn(document, "visibilityState", "get").mockReturnValue("visible");
+    const oldPageItem = numberedConversation(101);
+    const movedIntoSecondPage = {
+      ...numberedConversation(150),
+      activityAt: "2026-07-13T11:30:00.000Z",
+    };
+    const thirdPageItem = numberedConversation(201);
+    let firstPageCalls = 0;
+    const requestedCursors: string[] = [];
+    const fetchMock = vi.fn<(input: RequestInfo | URL) => Promise<Response>>(async (input) => {
+      const url = String(input);
+      if (url === "/api/conversations?realm=teacher&limit=100") {
+        firstPageCalls += 1;
+        return conversationsResponse([conversationA], firstPageCalls === 1 ? "old-page-2" : "new-page-2");
+      }
+      const cursor = new URL(url, "http://test").searchParams.get("cursor");
+      if (cursor) requestedCursors.push(cursor);
+      if (cursor === "old-page-2") return conversationsResponse([oldPageItem], "old-page-3");
+      if (cursor === "new-page-2") return conversationsResponse([movedIntoSecondPage], "new-page-3");
+      if (cursor === "new-page-3") return conversationsResponse([thirdPageItem]);
+      if (cursor === "old-page-3") return conversationsResponse([]);
+      if (url.includes("/messages?")) return messagesResponse([]);
+      return Response.json({ readCount: 0, readAt: "2026-07-13T12:01:00.000Z" });
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    render(<ChatWorkspace realm="teacher" />);
+    await act(async () => { for (let pass = 0; pass < 6; pass += 1) await Promise.resolve(); });
+    fireEvent.click(screen.getByRole("button", { name: "加载更多会话" }));
+    await act(async () => { for (let pass = 0; pass < 4; pass += 1) await Promise.resolve(); });
+    expect(screen.getByRole("button", { name: /第101位家长/ })).toBeInTheDocument();
+
+    await act(async () => { await vi.advanceTimersByTimeAsync(2_000); });
+    expect(firstPageCalls).toBe(2);
+    fireEvent.click(screen.getByRole("button", { name: "加载更多会话" }));
+    await act(async () => { for (let pass = 0; pass < 8; pass += 1) await Promise.resolve(); });
+
+    expect(requestedCursors).toEqual(["old-page-2", "new-page-2", "new-page-3"]);
+    expect(screen.getByRole("button", { name: /第150位家长/ })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /第201位家长/ })).toBeInTheDocument();
   });
 
   it("aborts and ignores a stale conversation page when the realm changes", async () => {
@@ -443,6 +490,15 @@ describe("ChatWorkspace", () => {
   });
 
   it("blocks through an accessible reason dialog, restores focus, preserves history, and disables only the composer", async () => {
+    const originalShowModal = Object.getOwnPropertyDescriptor(HTMLDialogElement.prototype, "showModal");
+    const originalClose = Object.getOwnPropertyDescriptor(HTMLDialogElement.prototype, "close");
+    const showModal = vi.fn(function (this: HTMLDialogElement) { this.setAttribute("open", ""); });
+    const close = vi.fn(function (this: HTMLDialogElement) {
+      this.removeAttribute("open");
+      this.dispatchEvent(new Event("close"));
+    });
+    Object.defineProperty(HTMLDialogElement.prototype, "showModal", { configurable: true, value: showModal });
+    Object.defineProperty(HTMLDialogElement.prototype, "close", { configurable: true, value: close });
     let blockBody: unknown;
     const fetchMock = vi.fn<(input: RequestInfo | URL, init?: RequestInit) => Promise<Response>>(async (input, init) => {
       const url = String(input);
@@ -456,23 +512,40 @@ describe("ChatWorkspace", () => {
     });
     vi.stubGlobal("fetch", fetchMock);
 
-    render(<ChatWorkspace realm="teacher" />);
-    const trigger = await screen.findByRole("button", { name: "屏蔽对方" });
-    trigger.focus();
-    fireEvent.click(trigger);
-    const dialog = screen.getByRole("dialog", { name: "屏蔽对方" });
-    const reason = within(dialog).getByLabelText("屏蔽原因");
-    expect(reason).toHaveFocus();
-    fireEvent.change(reason, { target: { value: "  不希望继续沟通  " } });
-    fireEvent.click(within(dialog).getByRole("button", { name: "确认屏蔽" }));
+    try {
+      render(<ChatWorkspace realm="teacher" />);
+      const trigger = await screen.findByRole("button", { name: "屏蔽对方" });
+      trigger.focus();
+      fireEvent.click(trigger);
+      let dialog = screen.getByRole("dialog", { name: "屏蔽对方" }) as HTMLDialogElement;
+      expect(dialog.tagName).toBe("DIALOG");
+      expect(showModal).toHaveBeenCalledOnce();
+      expect(within(dialog).getByLabelText("屏蔽原因")).toHaveFocus();
 
-    const blockedButton = await screen.findByRole("button", { name: "已屏蔽" });
-    expect(blockedButton).toHaveAttribute("aria-disabled", "true");
-    await waitFor(() => expect(blockedButton).toHaveFocus());
-    expect(blockBody).toEqual({ reason: "不希望继续沟通" });
-    expect(screen.getByText("屏蔽前历史仍可读")).toBeInTheDocument();
-    expect(screen.getByLabelText("消息内容")).toBeDisabled();
-    expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+      fireEvent(dialog, new Event("cancel", { bubbles: false, cancelable: true }));
+      await waitFor(() => expect(close).toHaveBeenCalledOnce());
+      await waitFor(() => expect(trigger).toHaveFocus());
+
+      fireEvent.click(trigger);
+      dialog = screen.getByRole("dialog", { name: "屏蔽对方" }) as HTMLDialogElement;
+      const reason = within(dialog).getByLabelText("屏蔽原因");
+      fireEvent.change(reason, { target: { value: "  不希望继续沟通  " } });
+      fireEvent.click(within(dialog).getByRole("button", { name: "确认屏蔽" }));
+
+      const blockedButton = await screen.findByRole("button", { name: "已屏蔽" });
+      expect(blockedButton).toHaveAttribute("aria-disabled", "true");
+      await waitFor(() => expect(blockedButton).toHaveFocus());
+      expect(close).toHaveBeenCalledTimes(2);
+      expect(blockBody).toEqual({ reason: "不希望继续沟通" });
+      expect(screen.getByText("屏蔽前历史仍可读")).toBeInTheDocument();
+      expect(screen.getByLabelText("消息内容")).toBeDisabled();
+      expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+    } finally {
+      if (originalShowModal) Object.defineProperty(HTMLDialogElement.prototype, "showModal", originalShowModal);
+      else delete (HTMLDialogElement.prototype as Partial<HTMLDialogElement>).showModal;
+      if (originalClose) Object.defineProperty(HTMLDialogElement.prototype, "close", originalClose);
+      else delete (HTMLDialogElement.prototype as Partial<HTMLDialogElement>).close;
+    }
   });
 
   it("polls only while visible, pulls immediately on resume, and starts retries after 2 seconds", async () => {

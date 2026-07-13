@@ -4,11 +4,12 @@ import { PrismaPg } from "@prisma/adapter-pg";
 import { PrismaClient } from "@prisma/client";
 import { existsSync } from "node:fs";
 import { loadEnvFile } from "node:process";
+import { Client } from "pg";
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
 vi.mock("server-only", () => ({}));
 
-import { encodeMessageChangeCursor, encodeMessageCursor } from "./schema";
+import { encodeMessageCursor } from "./schema";
 import { createChatService } from "./service";
 import { lockAccountPair } from "@/features/interactions/account-pair-lock";
 
@@ -284,53 +285,46 @@ describe("chat service against PostgreSQL", () => {
     expect(polled.nextAfterCursor).toBe(encodeMessageCursor({ sentAt: secondAt, id: ids[4] }));
   });
 
-  it("returns an empty-history polling watermark so subsequent reads can use after", async () => {
+  it("returns an empty-history sequence watermark without exposing bigint in JSON", async () => {
     const page = await service.listMessages(parent, conversationId, {});
     expect(page.items).toEqual([]);
     expect(page.nextAfterCursor).toBe(encodeMessageCursor({
       sentAt: new Date(0),
       id: "00000000-0000-0000-0000-000000000000",
     }));
-    expect(page.nextChangesCursor).toBe(encodeMessageChangeCursor({
-      updatedAt: fixedNow,
-      id: "00000000-0000-0000-0000-000000000000",
-    }));
+    expect(page.nextChangesCursor).toMatch(/^[1-9][0-9]*$/u);
+    expect(BigInt(page.nextChangesCursor!)).toBeGreaterThan(BigInt(0));
+    expect(() => JSON.stringify(page)).not.toThrow();
+    expect(JSON.stringify(page)).not.toContain("changeVersion");
   });
 
-  it("does not lose an earlier-sent message whose real transaction commits after the empty history query", async () => {
-    const tooEarlyAt = new Date("2026-07-13T11:59:59.000Z");
-    let insertedId = "";
-    let announceInserted!: () => void;
-    let releaseCommit!: () => void;
-    const inserted = new Promise<void>((resolve) => { announceInserted = resolve; });
-    const commit = new Promise<void>((resolve) => { releaseCommit = resolve; });
-    const writer = prisma.$transaction(async (transaction) => {
-      const message = await transaction.message.create({ data: {
-             conversationId,
-             senderAccountId: teacher.id,
-             clientMessageId: crypto.randomUUID(),
-             body: "查询后提交的消息",
-        sentAt: tooEarlyAt,
-      } });
-      insertedId = message.id;
-      announceInserted();
-      await commit;
-    });
-    await inserted;
+  it("observes a raw mutation from a transaction that began before the initial watermark but writes after it", async () => {
+    const delayed = await prisma.message.create({ data: {
+      conversationId,
+      senderAccountId: teacher.id,
+      clientMessageId: crypto.randomUUID(),
+      body: "延迟事务原文",
+      sentAt: new Date("2026-07-13T10:00:00.000Z"),
+    } });
+    const writer = new Client({ connectionString: process.env.DATABASE_URL! });
+    await writer.connect();
     try {
+      await writer.query("BEGIN");
       const initial = await service.listMessages(parent, conversationId, {});
-      expect(initial.items).toEqual([]);
-      expect(initial.nextAfterCursor).toBe(encodeMessageCursor({
-        sentAt: new Date(0),
-        id: "00000000-0000-0000-0000-000000000000",
-      }));
-      releaseCommit();
-      await writer;
-      const polled = await service.listMessages(parent, conversationId, { after: initial.nextAfterCursor! });
-      expect(polled.items.map(({ id }) => id)).toContain(insertedId);
+      await writer.query(`
+        UPDATE "Message"
+        SET "body" = '延迟事务变更', "editedAt" = $1, "updatedAt" = $1
+        WHERE "id" = $2
+      `, [new Date("2000-01-01T00:00:00.000Z"), delayed.id]);
+      await writer.query("COMMIT");
+
+      const polled = await service.listMessages(parent, conversationId, {
+        changesAfter: initial.nextChangesCursor!,
+      });
+      expect(polled.items).toEqual([expect.objectContaining({ id: delayed.id, body: "延迟事务变更" })]);
     } finally {
-      releaseCommit();
-      await writer.catch(() => undefined);
+      await writer.query("ROLLBACK").catch(() => undefined);
+      await writer.end().catch(() => undefined);
     }
   });
 
@@ -368,12 +362,138 @@ describe("chat service against PostgreSQL", () => {
     expect((await service.listConversations(parent, {})).items[0].unreadCount).toBe(1);
   });
 
-  it("polls full message DTO changes by updatedAt for new, read and deleted states with immediate continuation", async () => {
-    const nilId = "00000000-0000-0000-0000-000000000000";
+  it("does not lose a later same-millisecond mutation whose UUID sorts below the prior change", async () => {
+    const highId = "ffffffff-ffff-4fff-bfff-ffffffffffff";
+    const lowId = "01000000-0000-4000-8000-000000000001";
+    await prisma.message.createMany({ data: [highId, lowId].map((id) => ({
+      id,
+      conversationId,
+      senderAccountId: parent.id,
+      clientMessageId: crypto.randomUUID(),
+      body: id === highId ? "高 UUID" : "低 UUID",
+      sentAt: new Date("2026-07-13T10:00:00.000Z"),
+    })) });
+    const initial = await service.listMessages(teacher, conversationId, {});
+    const sameMillisecond = new Date("2026-07-13T12:30:00.000Z");
+    await prisma.$executeRaw`UPDATE "Message" SET "editedAt" = ${sameMillisecond}, "updatedAt" = ${sameMillisecond} WHERE "id" = ${highId}::uuid`;
+    const first = await service.listMessages(teacher, conversationId, {
+      changesAfter: initial.nextChangesCursor!,
+      limit: 1,
+    });
+    expect(first.items.map(({ id }) => id)).toEqual([highId]);
+
+    await prisma.$executeRaw`UPDATE "Message" SET "editedAt" = ${sameMillisecond}, "updatedAt" = ${sameMillisecond} WHERE "id" = ${lowId}::uuid`;
+    const second = await service.listMessages(teacher, conversationId, {
+      changesAfter: first.nextChangesCursor!,
+      limit: 1,
+    });
+    expect(second.items.map(({ id }) => id)).toEqual([lowId]);
+  });
+
+  it("overwrites client-supplied versions on raw inserts and updates", async () => {
+    const id = crypto.randomUUID();
+    const inserted = await prisma.$queryRaw<Array<{ changeVersion: bigint }>>`
+      INSERT INTO "Message" (
+        "id", "conversationId", "senderAccountId", "clientMessageId", "body", "changeVersion"
+      ) VALUES (
+        ${id}::uuid, ${conversationId}::uuid, ${teacher.id}::uuid, ${crypto.randomUUID()}, 'raw insert', 0
+      )
+      RETURNING "changeVersion"
+    `;
+    const updated = await prisma.$queryRaw<Array<{ changeVersion: bigint }>>`
+      UPDATE "Message"
+      SET "body" = 'raw update', "changeVersion" = 0
+      WHERE "id" = ${id}::uuid
+      RETURNING "changeVersion"
+    `;
+
+    expect(inserted[0].changeVersion).toBeGreaterThan(BigInt(0));
+    expect(updated[0].changeVersion).toBeGreaterThan(inserted[0].changeVersion);
+  });
+
+  it("makes a raw insert wait behind the application canonical pair-lock namespace", async () => {
+    let announceLocked!: () => void;
+    let releaseLock!: () => void;
+    const locked = new Promise<void>((resolve) => { announceLocked = resolve; });
+    const release = new Promise<void>((resolve) => { releaseLock = resolve; });
+    const outerLock = prisma.$transaction(async (transaction) => {
+      await lockAccountPair(transaction, teacher.id, parent.id);
+      announceLocked();
+      await release;
+    });
+    await locked;
+
+    const writer = new Client({ connectionString: process.env.DATABASE_URL! });
+    let pendingInsert: Promise<{ rows: Array<{ changeVersion: string }> }> | undefined;
+    await writer.connect();
+    try {
+      const writerPid = Number((await writer.query(`SELECT pg_backend_pid() AS pid`)).rows[0].pid);
+      let insertSettled = false;
+      pendingInsert = writer.query<{ changeVersion: string }>(`
+        INSERT INTO "Message" (
+          "id", "conversationId", "senderAccountId", "clientMessageId", "body", "changeVersion"
+        ) VALUES ($1,$2,$3,$4,'raw waiter',0)
+        RETURNING "changeVersion"
+      `, [crypto.randomUUID(), conversationId, teacher.id, crypto.randomUUID()])
+        .finally(() => { insertSettled = true; });
+
+      for (let attempt = 0; attempt < 100; attempt += 1) {
+        const waiting = await prisma.$queryRaw<Array<{ count: number }>>`
+          SELECT count(*)::int AS count FROM pg_locks
+          WHERE pid = ${writerPid} AND locktype = 'advisory' AND granted = false
+        `;
+        if (waiting[0].count > 0) break;
+        if (attempt === 99) throw new Error("raw insert trigger did not use the application pair-lock namespace");
+        await new Promise<void>((resolve) => setTimeout(resolve, 5));
+      }
+      expect(insertSettled).toBe(false);
+
+      releaseLock();
+      await outerLock;
+      const result = await pendingInsert;
+      expect(BigInt(result.rows[0].changeVersion)).toBeGreaterThan(BigInt(0));
+    } finally {
+      releaseLock();
+      await outerLock.catch(() => undefined);
+      await pendingInsert?.catch(() => undefined);
+      await writer.end().catch(() => undefined);
+    }
+  });
+
+  it("pages every message from one multi-row read receipt with limit one", async () => {
+    const ids = [
+      "02000000-0000-4000-8000-000000000001",
+      "02000000-0000-4000-8000-000000000002",
+    ];
+    await prisma.message.createMany({ data: ids.map((id) => ({
+      id,
+      conversationId,
+      senderAccountId: teacher.id,
+      clientMessageId: crypto.randomUUID(),
+      body: `待读 ${id}`,
+      sentAt: new Date("2026-07-13T10:00:00.000Z"),
+    })) });
+    const initial = await service.listMessages(teacher, conversationId, {});
+    await service.markRead(parent, conversationId, { messageIds: ids });
+
+    const first = await service.listMessages(teacher, conversationId, {
+      changesAfter: initial.nextChangesCursor!,
+      limit: 1,
+    });
+    expect(first.hasMore).toBe(true);
+    const second = await service.listMessages(teacher, conversationId, {
+      changesAfter: first.nextChangesCursor!,
+      limit: 1,
+    });
+    expect(second.hasMore).toBe(false);
+    expect(new Set([...first.items, ...second.items].map(({ id }) => id))).toEqual(new Set(ids));
+  });
+
+  it("polls full message DTO changes by sequence version for new, read and deleted states", async () => {
     let clock = new Date("2099-07-13T12:00:00.000Z");
     const changeService = createChatService(prisma, () => clock);
     const initial = await changeService.listMessages(teacher, conversationId, {});
-    expect(initial.nextChangesCursor).toBe(encodeMessageChangeCursor({ updatedAt: clock, id: nilId }));
+    expect(initial.nextChangesCursor).toMatch(/^[1-9][0-9]*$/u);
 
     clock = new Date("2099-07-13T12:00:01.000Z");
     const incoming = await changeService.sendMessage(parent, conversationId, {
@@ -399,7 +519,7 @@ describe("chat service against PostgreSQL", () => {
       mine: false,
     })]);
     expect(createdChanges.hasMore).toBe(true);
-    expect(createdChanges.nextChangesCursor).toBe(encodeMessageChangeCursor({ updatedAt: incomingAt, id: incoming.id }));
+    expect(BigInt(createdChanges.nextChangesCursor!)).toBeGreaterThan(BigInt(initial.nextChangesCursor!));
     const continuedChanges = await changeService.listMessages(teacher, conversationId, {
       changesAfter: createdChanges.nextChangesCursor!,
       limit: 1,
@@ -429,6 +549,64 @@ describe("chat service against PostgreSQL", () => {
       deletedAt: clock.toISOString(),
       updatedAt: clock.toISOString(),
     })]);
+  });
+
+  it("serializes raw same-pair triggers before allocating the later sequence version", async () => {
+    const [firstMessage, secondMessage] = await Promise.all([
+      prisma.message.create({ data: {
+        conversationId,
+        senderAccountId: teacher.id,
+        clientMessageId: crypto.randomUUID(),
+        body: "事务 A",
+      } }),
+      prisma.message.create({ data: {
+        conversationId,
+        senderAccountId: parent.id,
+        clientMessageId: crypto.randomUUID(),
+        body: "事务 B",
+      } }),
+    ]);
+    const firstWriter = new Client({ connectionString: process.env.DATABASE_URL! });
+    const secondWriter = new Client({ connectionString: process.env.DATABASE_URL! });
+    await Promise.all([firstWriter.connect(), secondWriter.connect()]);
+    try {
+      await Promise.all([firstWriter.query("BEGIN"), secondWriter.query("BEGIN")]);
+      const firstUpdate = await firstWriter.query<{ changeVersion: string }>(`
+        UPDATE "Message" SET "body" = "body" WHERE "id" = $1 RETURNING "changeVersion"
+      `, [firstMessage.id]);
+      const secondPid = Number((await secondWriter.query(`SELECT pg_backend_pid() AS pid`)).rows[0].pid);
+      let secondSettled = false;
+      const secondUpdate = secondWriter.query<{ changeVersion: string }>(`
+        UPDATE "Message" SET "body" = "body" WHERE "id" = $1 RETURNING "changeVersion"
+      `, [secondMessage.id]).finally(() => { secondSettled = true; });
+
+      for (let attempt = 0; attempt < 100; attempt += 1) {
+        const waiting = await prisma.$queryRaw<Array<{ count: number }>>`
+          SELECT count(*)::int AS count FROM pg_locks
+          WHERE pid = ${secondPid} AND locktype = 'advisory' AND granted = false
+        `;
+        if (waiting[0].count > 0) break;
+        if (attempt === 99) throw new Error("second trigger did not wait for the canonical pair lock");
+        await new Promise<void>((resolve) => setTimeout(resolve, 5));
+      }
+      expect(secondSettled).toBe(false);
+
+      await firstWriter.query("COMMIT");
+      const secondResult = await secondUpdate;
+      await secondWriter.query("COMMIT");
+      expect(BigInt(secondResult.rows[0].changeVersion)).toBeGreaterThan(
+        BigInt(firstUpdate.rows[0].changeVersion),
+      );
+    } finally {
+      await Promise.all([
+        firstWriter.query("ROLLBACK").catch(() => undefined),
+        secondWriter.query("ROLLBACK").catch(() => undefined),
+      ]);
+      await Promise.all([
+        firstWriter.end().catch(() => undefined),
+        secondWriter.end().catch(() => undefined),
+      ]);
+    }
   });
 
   it("rejects conversations whose accepted greeting or participant/request context no longer matches", async () => {

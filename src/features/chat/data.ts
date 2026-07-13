@@ -68,6 +68,7 @@ export const safeMessageSelect = Prisma.validator<Prisma.MessageSelect>()({
   editedAt: true,
   deletedAt: true,
   updatedAt: true,
+  changeVersion: true,
 });
 
 type SafeMessageRow = Prisma.MessageGetPayload<{ select: typeof safeMessageSelect }>;

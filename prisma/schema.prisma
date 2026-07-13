@@ -408,6 +408,7 @@ model Message {
   editedAt        DateTime? @db.Timestamptz(3)
   deletedAt       DateTime? @db.Timestamptz(3)
   updatedAt       DateTime  @default(now()) @db.Timestamptz(3)
+  changeVersion   BigInt    @default(0)
 
   conversation Conversation @relation(fields: [conversationId], references: [id], onDelete: Restrict)
   sender       Account      @relation(fields: [senderAccountId], references: [id], onDelete: Restrict)
@@ -415,7 +416,7 @@ model Message {
 
   @@unique([conversationId, clientMessageId])
   @@index([conversationId, sentAt, id])
-  @@index([conversationId, updatedAt, id])
+  @@index([conversationId, changeVersion])
   @@index([senderAccountId])
 }
 
