@@ -1,7 +1,7 @@
 // @vitest-environment node
 
 import { PrismaPg } from "@prisma/adapter-pg";
-import { PrismaClient } from "@prisma/client";
+import { Prisma, PrismaClient } from "@prisma/client";
 import { existsSync } from "node:fs";
 import { loadEnvFile } from "node:process";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
@@ -135,6 +135,70 @@ describe("greeting workflow against PostgreSQL", () => {
     await expect(service.send({ id: teacherId, role: "teacher" }, { targetId: requestId, requestId, note: "可以辅导" }))
       .rejects.toMatchObject({ code: "PENDING_EXISTS" });
     await expect(prisma.greeting.count({ where: { tutoringRequestId: requestId } })).resolves.toBe(1);
+  });
+
+  it("whitelists persisted card snapshots on inbox and response DTO boundaries", async () => {
+    const scenario = await isolatedScenario("快照脱敏");
+    const current = scenario.greeting.card as {
+      teacher: Record<string, unknown>;
+      request: Record<string, unknown>;
+    };
+    const poisonedCurrent = {
+      ...current,
+      evidence: "TOP-SECRET-EVIDENCE",
+      reviewNote: "TOP-SECRET-REVIEW",
+      teacher: { ...current.teacher, email: "teacher-secret@example.test" },
+      request: { ...current.request, studentNotes: "PRIVATE-STUDENT-NOTES" },
+    };
+    await prisma.greeting.update({
+      where: { id: scenario.greeting.id },
+      data: { cardSnapshot: poisonedCurrent as Prisma.InputJsonValue },
+    });
+
+    const page = await scenario.service.listInbox(
+      { id: scenario.parent.id, role: "parent" },
+      { box: "received", pageSize: 20 },
+    );
+    const inboxItem = page.items.find(({ id }) => id === scenario.greeting.id);
+    expect(inboxItem?.card).toEqual({ legacy: true });
+    expect(JSON.stringify(page)).not.toMatch(/TOP-SECRET|teacher-secret|PRIVATE-STUDENT-NOTES/i);
+
+    const response = await scenario.service.respond(
+      { id: scenario.parent.id, role: "parent" },
+      scenario.greeting.id,
+      { action: "reject" },
+    );
+    expect(response.card).toEqual({ legacy: true });
+    expect(JSON.stringify(response)).not.toMatch(/TOP-SECRET|teacher-secret|PRIVATE-STUDENT-NOTES/i);
+
+    await prisma.greeting.update({ where: { id: scenario.greeting.id }, data: { cardSnapshot: { legacy: true } } });
+    const legacyPage = await scenario.service.listInbox(
+      { id: scenario.parent.id, role: "parent" },
+      { box: "received", pageSize: 20 },
+    );
+    expect(legacyPage.items.find(({ id }) => id === scenario.greeting.id)?.card).toEqual({ legacy: true });
+
+    await prisma.greeting.update({
+      where: { id: scenario.greeting.id },
+      data: { cardSnapshot: { legacy: true, email: "legacy-secret@example.test" } },
+    });
+    const unsafeLegacyPage = await scenario.service.listInbox(
+      { id: scenario.parent.id, role: "parent" },
+      { box: "received", pageSize: 20 },
+    );
+    expect(unsafeLegacyPage.items.find(({ id }) => id === scenario.greeting.id)?.card).toEqual({ legacy: true });
+    expect(JSON.stringify(unsafeLegacyPage)).not.toContain("legacy-secret@example.test");
+
+    await prisma.greeting.update({
+      where: { id: scenario.greeting.id },
+      data: { cardSnapshot: { unknown: "UNKNOWN-SECRET" } },
+    });
+    const unknownPage = await scenario.service.listInbox(
+      { id: scenario.parent.id, role: "parent" },
+      { box: "received", pageSize: 20 },
+    );
+    expect(unknownPage.items.find(({ id }) => id === scenario.greeting.id)?.card).toEqual({ legacy: true });
+    expect(JSON.stringify(unknownPage)).not.toContain("UNKNOWN-SECRET");
   });
 
   it("marks verification true only for approved records that have not expired", async () => {

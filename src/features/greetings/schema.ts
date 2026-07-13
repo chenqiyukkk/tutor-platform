@@ -1,8 +1,8 @@
 import { z } from "zod";
 
 const contactPatterns = [
-  /(?:\(?\s*\+?\s*8[\s./()\-]*6\s*\)?[\s./()\-]*)?1[\s./()\-]*[3-9](?:[\s./()\-]*\d){9}/iu,
-  /(?:微\s*信|微\s*xin|wei\s*xin|we\s*chat|wechat|weixin|v\s*信|v\s*x|wx\s*号)/iu,
+  /(?:微\s*信|微\s*xin|wei\s*xin|we\s*chat|wechat|weixin|v\s*信)/iu,
+  /(?:^|[^\p{L}\p{N}])(?:w\s*x|v\s*x)(?=\s*(?:号|id|[:：])|\s+[\p{L}\p{N}_-]{2,}|$)/iu,
   /(?:^|[^a-z])q\s*q(?:[^a-z]|$)/iu,
   /扣\s*扣/iu,
   /二\s*维\s*码|扫码/iu,
@@ -14,11 +14,13 @@ const contactPatterns = [
 ];
 
 export const greetingNoteSchema = z.string().transform((value) => value.trim()).superRefine((value, context) => {
-  const normalized = value.normalize("NFKC");
+  const normalized = value.normalize("NFKC").replace(/\p{Cf}/gu, "");
+  const compactPhoneCandidate = normalized.replace(/[\s./()\-_,，、•·:：]/gu, "");
+  const hasPhoneNumber = /(?:^|[^\d])(?:\+?86)?1[3-9]\d{9}(?:$|[^\d])/u.test(compactPhoneCandidate);
   if (Array.from(value).length > 100) {
     context.addIssue({ code: "custom", message: "补充说明最多 100 个字符" });
   }
-  if (contactPatterns.some((pattern) => pattern.test(normalized))) {
+  if (hasPhoneNumber || contactPatterns.some((pattern) => pattern.test(normalized))) {
     context.addIssue({ code: "custom", message: "请勿填写联系方式、外部链接或付费引导" });
   }
 });

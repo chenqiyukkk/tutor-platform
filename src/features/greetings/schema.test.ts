@@ -26,6 +26,17 @@ describe("greeting note schema", () => {
     "电话 138.0013.8000",
     "电话 (+86) 138/0013/8000",
     "电话 （＋８６）１３８．００１３．８０００",
+    "电话 138_0013_8000",
+    "138，0013，8000",
+    "138•0013•8000",
+    "138·0013·8000",
+    "电话 １３８＿００１３＿８０００",
+    "电话 1\u200B38\u20600013\uFEFF8000",
+    "wx:abc",
+    "wx abc123",
+    "vx ID abc123",
+    "ｗｘ：ａｂｃ",
+    "w\u200Bx:abc",
     "加微 xin abc123",
     "加v信 abc123",
     "留 v x 详聊",
@@ -50,6 +61,8 @@ describe("greeting note schema", () => {
     "我住在朝阳区，线下或线上都可以。",
     "希望老师有三年以上教学经验。",
     "可以接受按课时付费，预算以内即可。",
+    "可以讲解 wxWidgets 的基础用法。",
+    "熟悉 AVX 指令优化，但会按学生水平讲解。",
   ])("does not reject legitimate tutoring notes: %s", (note) => {
     expect(greetingNoteSchema.parse(note)).toBe(note);
   });

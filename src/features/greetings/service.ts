@@ -4,7 +4,7 @@ import { Prisma, type PrismaClient, type TeacherProfile, type TutoringRequest } 
 
 import type { AuthenticatedAccount } from "@/features/auth/service";
 
-import type { CurrentGreetingCardSnapshot } from "./card-schema";
+import { greetingCardSnapshotSchema, type CurrentGreetingCardSnapshot } from "./card-schema";
 
 import {
   greetingActionSchema,
@@ -296,12 +296,13 @@ type GreetingDtoRow = {
 };
 
 function toDto(row: GreetingDtoRow, viewerId?: string) {
+  const parsedCard = greetingCardSnapshotSchema.safeParse(row.cardSnapshot);
   return {
     id: row.id,
     direction: viewerId ? (row.senderAccountId === viewerId ? "sent" as const : "received" as const) : undefined,
     status: row.status,
     note: row.message ?? "",
-    card: row.cardSnapshot,
+    card: parsedCard.success ? parsedCard.data : { legacy: true as const },
     createdAt: row.createdAt.toISOString(),
     expiresAt: row.expiresAt.toISOString(),
     respondedAt: row.respondedAt?.toISOString() ?? null,
