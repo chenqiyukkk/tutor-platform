@@ -1,7 +1,10 @@
 // @vitest-environment node
 
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 
+import { sessionCookieNames } from "@/features/auth/session";
+
+import { createDirectoryDetailAuthorizer } from "./detail-auth";
 import { createDirectoryHandlers } from "./route-handler";
 import type { DirectoryRepository } from "./repository";
 import type { RequestDirectoryQuery, TeacherDirectoryQuery } from "./query";
@@ -89,5 +92,24 @@ describe("public directory route handlers", () => {
       access: "detail",
       request: { ...requestPreview, description: "认证教师可见的需求详情", publicLocationNote: "商圈附近" },
     });
+  });
+
+  it.each([
+    `${sessionCookieNames.parent}=%E0%A4%A`,
+    `${sessionCookieNames.parent}=first; ${sessionCookieNames.parent}=second`,
+  ])("degrades unsafe detail cookies to an anonymous preview", async (cookie) => {
+    const authenticate = vi.fn(async () => undefined);
+    const handlers = createDirectoryHandlers(
+      repositoryStub(),
+      createDirectoryDetailAuthorizer(authenticate),
+    );
+    const response = await handlers.teachers.detail(
+      new Request("https://example.test", { headers: { cookie } }),
+      teacherPreview.id,
+    );
+
+    expect(response.status).toBe(200);
+    await expect(response.json()).resolves.toEqual({ access: "preview", teacher: teacherPreview });
+    expect(authenticate).not.toHaveBeenCalled();
   });
 });

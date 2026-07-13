@@ -6,6 +6,7 @@ import { z } from "zod";
 import { CircleRibbon } from "@/components/directory/circle-ribbon";
 import { DirectoryContactCta } from "@/components/directory/contact-cta";
 import { resolveTeacherCircleTier } from "@/features/directory/circle";
+import { formatDirectoryDate } from "@/features/directory/date";
 import { getAdjacentRegionPairs, getDirectoryAccessContext } from "@/features/directory/personalization";
 import { directoryRepository } from "@/features/directory/server";
 import type { PublicTeacherDetail } from "@/features/directory/redaction";
@@ -38,7 +39,7 @@ export default async function TeacherDetailPage({ params }: { params: Promise<{ 
           {detail ? <section><p className="eyebrow">教学自述</p><h2>怎样陪学生把问题想明白</h2><p className="directory-detail__prose">{detail.bio}</p></section> : null}
           <section><p className="eyebrow">授课信息</p><dl className="directory-detail__facts"><div><dt>教学经验</dt><dd>{teacher.yearsExperience} 年</dd></div><div><dt>课时费</dt><dd>{money(teacher.rateMinCents)}–{money(teacher.rateMaxCents)}/小时</dd></div><div><dt>上课方式</dt><dd>{teacher.online ? "线上 / 线下" : "线下"}</dd></div><div><dt>认证</dt><dd>{teacher.verified ? "已通过身份认证" : "未通过认证"}</dd></div></dl></section>
           <section><p className="eyebrow">科目与地区</p><div className="directory-detail__columns"><div><h2>授课科目</h2><ul className="directory-tags">{teacher.subjects.map((subject) => <li key={subject.id}>{subject.name}</li>)}</ul></div><div><h2>服务区县</h2><ul className="directory-area-list">{teacher.serviceAreas.map((area) => <li key={area.id}><strong>{area.name}</strong>{area.isPrimary ? <span>主要地区</span> : null}</li>)}</ul></div></div></section>
-          <footer>发布于 {teacher.publishedAt ? new Intl.DateTimeFormat("zh-CN", { dateStyle: "long" }).format(new Date(teacher.publishedAt)) : "未知日期"} · 平台不会展示证件材料或联系方式</footer>
+          <footer>发布于 {teacher.publishedAt ? formatDirectoryDate(teacher.publishedAt) : "未知日期"} · 平台不会展示证件材料或联系方式</footer>
         </article>
         <DirectoryContactCta isLoggedIn={access.authenticated} kind="teacher" />
       </div>

@@ -4,7 +4,7 @@ import { PrismaPg } from "@prisma/adapter-pg";
 import { PrismaClient } from "@prisma/client";
 import { existsSync } from "node:fs";
 import { loadEnvFile } from "node:process";
-import { afterAll, describe, expect, it, vi } from "vitest";
+import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 
 vi.mock("server-only", () => ({}));
 
@@ -30,6 +30,8 @@ describe("Prisma public directory repository", () => {
   let activeRegionId = "";
   let canonicalAdjacentPair: [string, string] = ["", ""];
   let expiredRequestId = "";
+  let hiddenTeacherIds: string[] = [];
+  let hiddenRequestIds: string[] = [];
 
   async function account(role: "TEACHER" | "PARENT", label: string, status: "ACTIVE" | "DISABLED" = "ACTIVE") {
     const created = await prisma.account.create({ data: {
@@ -52,7 +54,7 @@ describe("Prisma public directory repository", () => {
     await prisma.$disconnect();
   });
 
-  it("returns only publishable teachers and requests through public whitelist DTOs", async () => {
+  beforeAll(async () => {
     const activeSubject = await prisma.subject.create({ data: {
       name: `数学-${marker}`, slug: `directory-math-${marker}`,
     } });
@@ -189,6 +191,19 @@ describe("Prisma public directory repository", () => {
       subjects: { create: { subjectId: activeSubject.id } },
     } });
     expiredRequestId = expiredRequest.id;
+    hiddenTeacherIds = [
+      disabledTeacher.id,
+      inactiveSubjectTeacher.id,
+      inactiveRegionTeacher.id,
+    ];
+    hiddenRequestIds = [
+      inactiveSubjectRequest.id,
+      inactiveRegionRequest.id,
+      expiredRequest.id,
+    ];
+  });
+
+  it("returns only publishable teachers and requests through public whitelist DTOs", async () => {
 
     const teachers = await repository.listTeachers({
       page: 1, pageSize: 12,
@@ -200,23 +215,19 @@ describe("Prisma public directory repository", () => {
     expect(teachers.total).toBe(1);
     expect(teachers.items).toHaveLength(1);
     expect(teachers.items[0]).toMatchObject({
-      id: visibleTeacher.id,
+      id: visibleTeacherId,
       publicNickname: `林老师-${marker}`,
       verified: true,
     });
-    expect(teachers.items.map(({ id }) => id)).not.toEqual(expect.arrayContaining([
-      disabledTeacher.id, inactiveSubjectTeacher.id, inactiveRegionTeacher.id,
-    ]));
+    expect(teachers.items.map(({ id }) => id)).not.toEqual(expect.arrayContaining(hiddenTeacherIds));
     expect(requests.total).toBe(1);
     expect(requests.items).toHaveLength(1);
     expect(requests.items[0]).toMatchObject({
-      id: visibleRequest.id,
+      id: visibleRequestId,
       studentAlias: "小树",
       gradeLevel: "GRADE_8",
     });
-    expect(requests.items.map(({ id }) => id)).not.toEqual(expect.arrayContaining([
-      inactiveSubjectRequest.id, inactiveRegionRequest.id, expiredRequest.id,
-    ]));
+    expect(requests.items.map(({ id }) => id)).not.toEqual(expect.arrayContaining(hiddenRequestIds));
     const payload = JSON.stringify({ teachers, requests });
     expect(payload).not.toContain("@private.example");
     expect(payload).not.toContain("private-password");

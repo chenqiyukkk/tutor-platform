@@ -7,7 +7,7 @@ import { EmptyState } from "@/components/ui/empty-state";
 import { Pagination } from "@/components/ui/pagination";
 import { resolveTeacherCircleTier, type DirectoryCircleTier } from "@/features/directory/circle";
 import { getAdjacentRegionPairs, getDirectoryAccessContext, getDirectoryFilterOptions } from "@/features/directory/personalization";
-import { DirectoryQueryError, parseTeacherDirectoryQuery } from "@/features/directory/query";
+import { DirectoryQueryError, directoryFilterKey, parseTeacherDirectoryQuery } from "@/features/directory/query";
 import { directoryRepository } from "@/features/directory/server";
 
 export const metadata: Metadata = { title: "找老师｜家教平台" };
@@ -85,7 +85,7 @@ export default async function TeachersPage({ searchParams: incoming }: { searchP
         </div>
       </header>
       <div className="site-container directory-layout">
-        <aside><FilterBar kind="teachers" options={options} values={query} /></aside>
+        <aside><FilterBar key={directoryFilterKey(query)} kind="teachers" options={options} values={query} /></aside>
         <section aria-labelledby="teacher-results-title" className="directory-results">
           <div className="directory-results__heading">
             <div><p className="eyebrow">公开老师名册</p><h2 id="teacher-results-title">{invalidMessage ? "筛选条件需要修改" : `找到 ${result.total} 位老师`}</h2></div>

@@ -7,7 +7,7 @@ import { EmptyState } from "@/components/ui/empty-state";
 import { Pagination } from "@/components/ui/pagination";
 import { resolveRequestCircleTier, type DirectoryCircleTier } from "@/features/directory/circle";
 import { getAdjacentRegionPairs, getDirectoryAccessContext, getDirectoryFilterOptions } from "@/features/directory/personalization";
-import { DirectoryQueryError, parseRequestDirectoryQuery } from "@/features/directory/query";
+import { DirectoryQueryError, directoryFilterKey, parseRequestDirectoryQuery } from "@/features/directory/query";
 import { directoryRepository } from "@/features/directory/server";
 
 export const metadata: Metadata = { title: "找家教需求｜家教平台" };
@@ -47,7 +47,7 @@ export default async function RequestsPage({ searchParams }: { searchParams: Pro
     <main className="directory-page directory-page--requests" id="main-content">
       <header className="directory-hero"><div className="site-container directory-hero__inner"><p className="eyebrow">老师找学生</p><h1>真实需求，留给真正合适的人回应</h1><p>这里不公开家长身份、联系方式或学生内部备注，只呈现选择家教所需的信息。</p>{viewer ? <p className="directory-hero__personalized">已按你的授课地区标记圈层</p> : <CircleRibbon authenticated={access.authenticated} />}</div></header>
       <div className="site-container directory-layout">
-        <aside><FilterBar kind="requests" options={options} values={query} /></aside>
+        <aside><FilterBar key={directoryFilterKey(query)} kind="requests" options={options} values={query} /></aside>
         <section aria-labelledby="request-results-title" className="directory-results">
           <div className="directory-results__heading"><div><p className="eyebrow">公开需求公告</p><h2 id="request-results-title">{invalidMessage ? "筛选条件需要修改" : `找到 ${result.total} 份需求`}</h2></div><Link className="directory-switch" href="/teachers">切换查看老师 →</Link></div>
           {invalidMessage ? <EmptyState eyebrow="筛选条件无效" title="无法使用这组筛选" description={`${invalidMessage}。请清除筛选后重试。`} action={<Link className="button button--outline" href="/requests">清除筛选</Link>} /> : result.items.length ? (

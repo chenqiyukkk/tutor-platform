@@ -154,6 +154,7 @@ model TeacherProfile {
   verifications Verification[]
 
   @@index([status])
+  @@index([status, publishedAt(sort: Desc), id])
 }
 
 model ParentProfile {
@@ -297,6 +298,7 @@ model TutoringRequest {
   @@index([parentProfileId, status])
   @@index([regionId, status])
   @@index([publishedAt])
+  @@index([status, publishedAt(sort: Desc), id])
 }
 
 model RequestSubject {

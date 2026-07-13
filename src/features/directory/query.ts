@@ -1,7 +1,7 @@
 import { z } from "zod";
 
 const paginationShape = {
-  page: z.number().int().min(1).max(10_000).default(1),
+  page: z.number().int().min(1).max(100).default(1),
   pageSize: z.number().int().min(1).max(24).default(12),
 };
 
@@ -87,3 +87,21 @@ export function parseRequestDirectoryQuery(searchParams: URLSearchParams) {
 
 export type TeacherDirectoryQuery = ReturnType<typeof parseTeacherDirectoryQuery>;
 export type RequestDirectoryQuery = ReturnType<typeof parseRequestDirectoryQuery>;
+
+const filterKeyFields = [
+  "district",
+  "subject",
+  "identityType",
+  "mode",
+  "budgetMin",
+  "budgetMax",
+] as const;
+
+export function directoryFilterKey(query: TeacherDirectoryQuery | RequestDirectoryQuery) {
+  const params = new URLSearchParams();
+  for (const field of filterKeyFields) {
+    const value = field in query ? query[field as keyof typeof query] : undefined;
+    if (value !== undefined) params.set(field, String(value));
+  }
+  return params.toString();
+}

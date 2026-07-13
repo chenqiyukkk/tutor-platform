@@ -6,6 +6,7 @@ import { z } from "zod";
 import { CircleRibbon } from "@/components/directory/circle-ribbon";
 import { DirectoryContactCta } from "@/components/directory/contact-cta";
 import { resolveRequestCircleTier } from "@/features/directory/circle";
+import { formatDirectoryDate } from "@/features/directory/date";
 import { getAdjacentRegionPairs, getDirectoryAccessContext } from "@/features/directory/personalization";
 import { directoryRepository } from "@/features/directory/server";
 import type { PublicRequestDetail } from "@/features/directory/redaction";
@@ -39,7 +40,7 @@ export default async function RequestDetailPage({ params }: { params: Promise<{ 
           {detail ? <section><p className="eyebrow">需求说明</p><h2>希望老师了解的学习情况</h2><p className="directory-detail__prose">{detail.description}</p></section> : null}
           <section><p className="eyebrow">安排与预算</p><dl className="directory-detail__facts"><div><dt>预算</dt><dd>{budget(request.budgetMinCents, request.budgetMaxCents)}</dd></div><div><dt>上课方式</dt><dd>{request.teachingMode ? modes[request.teachingMode] : "待商量"}</dd></div><div><dt>时间安排</dt><dd>{request.scheduleText ?? "待商量"}</dd></div><div><dt>大致位置</dt><dd>{request.region?.name}{detail?.publicLocationNote ? ` · ${detail.publicLocationNote}` : ""}</dd></div></dl></section>
           <section><p className="eyebrow">辅导科目</p><ul className="directory-tags">{request.subjects.map((subject) => <li key={subject.id}>{subject.name}</li>)}</ul></section>
-          <footer>发布于 {request.publishedAt ? new Intl.DateTimeFormat("zh-CN", { dateStyle: "long" }).format(new Date(request.publishedAt)) : "未知日期"} · 学生内部备注、家长资料与联系方式均不公开</footer>
+          <footer>发布于 {request.publishedAt ? formatDirectoryDate(request.publishedAt) : "未知日期"} · 学生内部备注、家长资料与联系方式均不公开</footer>
         </article>
         <DirectoryContactCta isLoggedIn={access.authenticated} kind="request" />
       </div>

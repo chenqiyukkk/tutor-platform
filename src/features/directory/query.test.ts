@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 
 import {
   DirectoryQueryError,
+  directoryFilterKey,
   parseRequestDirectoryQuery,
   parseTeacherDirectoryQuery,
 } from "./query";
@@ -30,7 +31,7 @@ describe("directory query parsing", () => {
     "page=1&page=2",
     "identityType=NOT_REAL",
     "pageSize=25",
-    "page=10001",
+    "page=101",
     "budgetMin=200&budgetMax=100",
     "mode=BOTH",
   ])("rejects invalid teacher query %s", (search) => {
@@ -50,5 +51,19 @@ describe("directory query parsing", () => {
       page: 1,
       pageSize: 12,
     });
+  });
+
+  it("builds a stable filter key independent of URL order and pagination", () => {
+    const first = parseTeacherDirectoryQuery(new URLSearchParams(
+      "subject=22222222-2222-4222-8222-222222222222&district=11111111-1111-4111-8111-111111111111&page=2",
+    ));
+    const second = parseTeacherDirectoryQuery(new URLSearchParams(
+      "page=9&district=11111111-1111-4111-8111-111111111111&subject=22222222-2222-4222-8222-222222222222",
+    ));
+
+    expect(directoryFilterKey(first)).toBe(directoryFilterKey(second));
+    expect(directoryFilterKey(first)).toBe(
+      "district=11111111-1111-4111-8111-111111111111&subject=22222222-2222-4222-8222-222222222222",
+    );
   });
 });

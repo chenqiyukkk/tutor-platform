@@ -30,7 +30,12 @@ describe("teacher profile migration compatibility", () => {
         .filter((entry) => entry.isDirectory())
         .map((entry) => entry.name)
         .sort();
-      for (const migration of migrations.slice(0, 4)) {
+      const teacherProfileMigration = migrations.find((migration) =>
+        migration.endsWith("_teacher_profiles"),
+      );
+      if (!teacherProfileMigration) throw new Error("teacher profile migration is missing");
+      const teacherProfileMigrationIndex = migrations.indexOf(teacherProfileMigration);
+      for (const migration of migrations.slice(0, teacherProfileMigrationIndex)) {
         await temp.query(readFileSync(join(migrationsRoot, migration, "migration.sql"), "utf8"));
       }
       const accountId = crypto.randomUUID();
@@ -49,7 +54,10 @@ describe("teacher profile migration compatibility", () => {
         VALUES ($1, $2, '负数旧资料', -1, now()), ($3, $4, '超限旧资料', 1000.01, now())
       `, [crypto.randomUUID(), account.rows[0].id, crypto.randomUUID(), overLimitAccountId]);
 
-      await temp.query(readFileSync(join(migrationsRoot, migrations[4], "migration.sql"), "utf8"));
+      await temp.query(readFileSync(
+        join(migrationsRoot, teacherProfileMigration, "migration.sql"),
+        "utf8",
+      ));
 
       const profiles = await temp.query<{ displayName: string; hourlyRate: string | null }>(`
         SELECT "displayName", "hourlyRate" FROM "TeacherProfile"

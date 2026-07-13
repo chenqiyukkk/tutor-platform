@@ -3,19 +3,28 @@ import { sessionCookieNames } from "@/features/auth/session";
 type DetailRole = "parent" | "teacher";
 type AuthenticateSession = (role: DetailRole, token: string) => Promise<unknown>;
 
-function cookieValue(request: Request, name: string) {
-  for (const cookie of (request.headers.get("cookie") ?? "").split(";")) {
+export function readUniqueCookieValue(cookieHeader: string | null | undefined, name: string) {
+  const matches: string[] = [];
+  for (const cookie of (cookieHeader ?? "").split(";")) {
     const [rawName, ...value] = cookie.trim().split("=");
-    if (rawName === name) return decodeURIComponent(value.join("="));
+    if (rawName === name) matches.push(value.join("="));
   }
-  return undefined;
+  if (matches.length !== 1 || !matches[0]) return undefined;
+  try {
+    return decodeURIComponent(matches[0]) || undefined;
+  } catch {
+    return undefined;
+  }
 }
 
 export function createDirectoryDetailAuthorizer(authenticate: AuthenticateSession) {
   return async (request: Request, role: DetailRole) => {
-    const token = cookieValue(request, sessionCookieNames[role]);
-    if (!token) return false;
     try {
+      const token = readUniqueCookieValue(
+        request.headers.get("cookie"),
+        sessionCookieNames[role],
+      );
+      if (!token) return false;
       await authenticate(role, token);
       return true;
     } catch {

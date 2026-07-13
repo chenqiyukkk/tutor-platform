@@ -1,6 +1,6 @@
 import "server-only";
 
-import { cookies } from "next/headers";
+import { headers } from "next/headers";
 
 import { getAuthService } from "@/features/auth/server";
 import { sessionCookieNames } from "@/features/auth/session";
@@ -8,9 +8,13 @@ import { db } from "@/lib/db";
 
 import { findAdjacentRegionPairs } from "./adjacency";
 import { createDirectoryAccessContext, type DirectoryViewer } from "./circle";
+import { readUniqueCookieValue } from "./detail-auth";
 
 export async function getDirectoryAccessContext(role: "parent" | "teacher") {
-  const token = (await cookies()).get(sessionCookieNames[role])?.value;
+  const token = readUniqueCookieValue(
+    (await headers()).get("cookie"),
+    sessionCookieNames[role],
+  );
   if (!token) return createDirectoryAccessContext(false, null);
   let account;
   try {
