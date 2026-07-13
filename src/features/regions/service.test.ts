@@ -3,6 +3,18 @@ import { describe, expect, it, vi } from "vitest";
 import { createRegionService, RegionQueryError, type RegionRepository } from "./service";
 
 describe("region service", () => {
+  it("exposes repository adjacency for server-side matching assembly", async () => {
+    const listAdjacentRegionIds = vi.fn().mockResolvedValue(["district-b", "district-c"]);
+    const service = createRegionService({
+      list: vi.fn(),
+      listAdjacentRegionIds,
+    } as unknown as RegionRepository);
+
+    await expect(service.listAdjacentRegionIds("district-a")).resolves
+      .toEqual(["district-b", "district-c"]);
+    expect(listAdjacentRegionIds).toHaveBeenCalledWith("district-a");
+  });
+
   it("defaults to active root provinces and returns only the public DTO", async () => {
     const list = vi.fn().mockResolvedValue([
       {
@@ -15,7 +27,10 @@ describe("region service", () => {
         isActive: true,
       },
     ]);
-    const service = createRegionService({ list } as RegionRepository);
+    const service = createRegionService({
+      list,
+      listAdjacentRegionIds: vi.fn().mockResolvedValue([]),
+    } as RegionRepository);
 
     await expect(service.listRegions(new URLSearchParams())).resolves.toEqual([
       { id: "province-id", code: "440000", name: "广东省", level: 1, parentId: null },
@@ -25,7 +40,10 @@ describe("region service", () => {
 
   it.each(["2", "3"])("accepts level %s only with a UUID parentId", async (level) => {
     const list = vi.fn().mockResolvedValue([]);
-    const service = createRegionService({ list } as RegionRepository);
+    const service = createRegionService({
+      list,
+      listAdjacentRegionIds: vi.fn().mockResolvedValue([]),
+    } as RegionRepository);
     const parentId = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa";
 
     await service.listRegions(new URLSearchParams({ parentId, level }));

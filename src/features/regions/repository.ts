@@ -28,4 +28,13 @@ export class PrismaRegionRepository implements RegionRepository {
       ],
     });
   }
+
+  async listAdjacentRegionIds(regionId: string) {
+    const pairs = await this.prisma.regionAdjacency.findMany({
+      where: { OR: [{ regionAId: regionId }, { regionBId: regionId }] },
+      select: { regionAId: true, regionBId: true },
+    });
+    return [...new Set(pairs.map((pair) =>
+      pair.regionAId === regionId ? pair.regionBId : pair.regionAId))].sort();
+  }
 }

@@ -2,22 +2,30 @@
 
 import { useEffect, useId, useRef, useState } from "react";
 
-import type { RegionDto } from "@/features/regions/service";
+import { regionDtoListSchema, type RegionDto } from "@/features/regions/schema";
+
+type FetchRegionOptions = {
+  signal?: AbortSignal;
+};
 
 export type FetchRegions = (query: {
   level?: 1 | 2 | 3;
   parentId?: string;
-}) => Promise<RegionDto[]>;
+}, options?: FetchRegionOptions) => Promise<RegionDto[]>;
 
-async function fetchRegionsFromApi(query: Parameters<FetchRegions>[0]) {
+async function fetchRegionsFromApi(
+  query: Parameters<FetchRegions>[0],
+  options?: FetchRegionOptions,
+) {
   const searchParams = new URLSearchParams();
   if (query.level !== undefined) searchParams.set("level", String(query.level));
   if (query.parentId !== undefined) searchParams.set("parentId", query.parentId);
-  const response = await fetch(`/api/regions?${searchParams.toString()}`);
+  const response = await fetch(`/api/regions?${searchParams.toString()}`, {
+    signal: options?.signal,
+  });
   if (!response.ok) throw new Error("Failed to fetch regions");
   const regions: unknown = await response.json();
-  if (!Array.isArray(regions)) throw new Error("Invalid region response");
-  return regions as RegionDto[];
+  return regionDtoListSchema.parse(regions);
 }
 
 type RegionPickerProps = {
@@ -39,10 +47,13 @@ export function RegionPicker({
   const [loadingLevel, setLoadingLevel] = useState<1 | 2 | 3 | null>(1);
   const [error, setError] = useState<string | null>(null);
   const requestSequence = useRef<Record<2 | 3, number>>({ 2: 0, 3: 0 });
+  const controllers = useRef<Partial<Record<1 | 2 | 3, AbortController>>>({});
 
   useEffect(() => {
     let active = true;
-    fetchRegions({ level: 1 })
+    const controller = new AbortController();
+    controllers.current[1] = controller;
+    fetchRegions({ level: 1 }, { signal: controller.signal })
       .then((regions) => {
         if (active) setProvinces(regions);
       })
@@ -50,19 +61,29 @@ export function RegionPicker({
         if (active) setError("区域加载失败，请稍后重试");
       })
       .finally(() => {
-        if (active) setLoadingLevel(null);
+        if (active && controllers.current[1] === controller) {
+          controllers.current[1] = undefined;
+          setLoadingLevel(null);
+        }
       });
     return () => {
       active = false;
+      for (const pendingController of Object.values(controllers.current)) {
+        pendingController?.abort();
+      }
+      controllers.current = {};
     };
   }, [fetchRegions]);
 
   async function loadChildren(level: 2 | 3, parentId: string) {
+    controllers.current[level]?.abort();
+    const controller = new AbortController();
+    controllers.current[level] = controller;
     const sequence = ++requestSequence.current[level];
     setLoadingLevel(level);
     setError(null);
     try {
-      const regions = await fetchRegions({ level, parentId });
+      const regions = await fetchRegions({ level, parentId }, { signal: controller.signal });
       if (requestSequence.current[level] !== sequence) return;
       if (level === 2) setCities(regions);
       else setDistricts(regions);
@@ -70,11 +91,21 @@ export function RegionPicker({
       if (requestSequence.current[level] !== sequence) return;
       setError("区域加载失败，请稍后重试");
     } finally {
-      if (requestSequence.current[level] === sequence) setLoadingLevel(null);
+      if (
+        requestSequence.current[level] === sequence &&
+        controllers.current[level] === controller
+      ) {
+        controllers.current[level] = undefined;
+        setLoadingLevel(null);
+      }
     }
   }
 
   function changeProvince(nextProvinceId: string) {
+    controllers.current[2]?.abort();
+    controllers.current[3]?.abort();
+    controllers.current[2] = undefined;
+    controllers.current[3] = undefined;
     requestSequence.current[2] += 1;
     requestSequence.current[3] += 1;
     setProvinceId(nextProvinceId);
@@ -89,6 +120,8 @@ export function RegionPicker({
   }
 
   function changeCity(nextCityId: string) {
+    controllers.current[3]?.abort();
+    controllers.current[3] = undefined;
     requestSequence.current[3] += 1;
     setCityId(nextCityId);
     setDistrictId("");

@@ -1,6 +1,6 @@
 import { render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 
 import type { RegionDto } from "@/features/regions/service";
 import { RegionPicker, type FetchRegions } from "./region-picker";
@@ -22,6 +22,8 @@ function deferred<T>() {
 }
 
 describe("RegionPicker", () => {
+  afterEach(() => vi.restoreAllMocks());
+
   it("loads dependent selects, emits only a district id, and clears descendants", async () => {
     const onChange = vi.fn();
     const fetchRegions = vi.fn(async ({ level, parentId }) => {
@@ -145,5 +147,76 @@ describe("RegionPicker", () => {
 
     await waitFor(() => expect(screen.queryByRole("option", { name: "天河区" })).not.toBeInTheDocument());
     expect(screen.getByRole("option", { name: "南山区" })).toBeInTheDocument();
+  });
+
+  it("aborts the previous city request when a new province is selected", async () => {
+    const pending = new Promise<RegionDto[]>(() => undefined);
+    const citySignals = new Map<string, AbortSignal | undefined>();
+    const fetchRegions = vi.fn((
+      { level, parentId }: { level?: number; parentId?: string },
+      options?: { signal?: AbortSignal },
+    ) => {
+      if (level === 1) return Promise.resolve([province, provinceTwo]);
+      citySignals.set(parentId!, options?.signal);
+      return pending;
+    }) as unknown as FetchRegions;
+    render(<RegionPicker fetchRegions={fetchRegions} onChange={vi.fn()} />);
+
+    const provinceSelect = await screen.findByLabelText("省份");
+    await userEvent.selectOptions(provinceSelect, province.id);
+    await userEvent.selectOptions(provinceSelect, provinceTwo.id);
+
+    expect(citySignals.get(province.id)?.aborted).toBe(true);
+    expect(citySignals.get(provinceTwo.id)?.aborted).toBe(false);
+  });
+
+  it("aborts a pending district request when its province is changed", async () => {
+    let districtSignal: AbortSignal | undefined;
+    const fetchRegions = vi.fn((
+      { level }: { level?: number },
+      options?: { signal?: AbortSignal },
+    ) => {
+      if (level === 1) return Promise.resolve([province, provinceTwo]);
+      if (level === 2) return Promise.resolve([cityOne]);
+      districtSignal = options?.signal;
+      return new Promise<RegionDto[]>(() => undefined);
+    }) as unknown as FetchRegions;
+    render(<RegionPicker fetchRegions={fetchRegions} onChange={vi.fn()} />);
+
+    await userEvent.selectOptions(await screen.findByLabelText("省份"), province.id);
+    await userEvent.selectOptions(await screen.findByLabelText("城市"), cityOne.id);
+    await userEvent.selectOptions(screen.getByLabelText("省份"), provinceTwo.id);
+
+    expect(districtSignal?.aborted).toBe(true);
+  });
+
+  it("aborts the initial request when unmounted", async () => {
+    let initialSignal: AbortSignal | undefined;
+    const fetchRegions = vi.fn((
+      _query: { level?: number },
+      options?: { signal?: AbortSignal },
+    ) => {
+      initialSignal = options?.signal;
+      return new Promise<RegionDto[]>(() => undefined);
+    }) as unknown as FetchRegions;
+    const { unmount } = render(<RegionPicker fetchRegions={fetchRegions} onChange={vi.fn()} />);
+    await waitFor(() => expect(fetchRegions).toHaveBeenCalledOnce());
+
+    unmount();
+
+    expect(initialSignal?.aborted).toBe(true);
+  });
+
+  it("rejects an invalid region DTO returned by the default fetcher", async () => {
+    vi.spyOn(globalThis, "fetch").mockResolvedValue(new Response(JSON.stringify([
+      { id: "not-a-uuid", code: "", name: "", level: 99, parentId: "also-invalid" },
+    ]), {
+      status: 200,
+      headers: { "content-type": "application/json" },
+    }));
+    render(<RegionPicker onChange={vi.fn()} />);
+
+    expect(await screen.findByRole("alert")).toHaveTextContent("区域加载失败，请稍后重试");
+    expect(screen.getByLabelText("省份")).toBeDisabled();
   });
 });

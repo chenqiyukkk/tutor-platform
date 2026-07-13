@@ -1,10 +1,6 @@
-export type RegionDto = {
-  id: string;
-  code: string;
-  name: string;
-  level: number;
-  parentId: string | null;
-};
+import type { RegionDto } from "./schema";
+
+export type { RegionDto } from "./schema";
 
 export type RegionQuery = {
   parentId?: string | null;
@@ -13,6 +9,7 @@ export type RegionQuery = {
 
 export interface RegionRepository {
   list(query: RegionQuery): Promise<readonly RegionDto[]>;
+  listAdjacentRegionIds(regionId: string): Promise<readonly string[]>;
 }
 
 export class RegionQueryError extends Error {
@@ -65,6 +62,10 @@ export function createRegionService(repository: RegionRepository) {
     async listRegions(searchParams: URLSearchParams) {
       const regions = await repository.list(parseRegionQuery(searchParams));
       return regions.map(toRegionDto);
+    },
+
+    async listAdjacentRegionIds(regionId: string) {
+      return repository.listAdjacentRegionIds(regionId);
     },
   };
 }

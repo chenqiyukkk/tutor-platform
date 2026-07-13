@@ -10,6 +10,7 @@ describe("GET /api/regions", () => {
       list: vi.fn().mockResolvedValue([
         { id: "p1", code: "440000", name: "广东省", level: 1, parentId: null },
       ]),
+      listAdjacentRegionIds: vi.fn().mockResolvedValue([]),
     } as RegionRepository);
 
     const response = await handler(new Request("http://localhost/api/regions?level=1"));
@@ -29,7 +30,10 @@ describe("GET /api/regions", () => {
     ["parent without level", "parentId=aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa"],
   ])("returns stable 400 for %s without querying", async (_label, query) => {
     const list = vi.fn();
-    const handler = createRegionsGetHandler({ list } as RegionRepository);
+    const handler = createRegionsGetHandler({
+      list,
+      listAdjacentRegionIds: vi.fn().mockResolvedValue([]),
+    } as RegionRepository);
 
     const response = await handler(new Request(`http://localhost/api/regions?${query}`));
 
