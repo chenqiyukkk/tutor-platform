@@ -2,7 +2,7 @@ import { z } from "zod";
 
 const contactPatterns = [
   /(?:微\s*信|微\s*xin|wei\s*xin|we\s*chat|wechat|weixin|v\s*信)/iu,
-  /(?:^|[^\p{L}\p{N}])(?:w\s*x|v\s*x)(?=\s*(?:号|id|[:：])|\s+[\p{L}\p{N}_-]{2,}|$)/iu,
+  /(?:^|[^A-Za-z0-9])(?:w\s*x|v\s*x)(?=\s*(?:号|id|[:：])|\s+[\p{L}\p{N}_-]{2,}|$)/iu,
   /(?:^|[^a-z])q\s*q(?:[^a-z]|$)/iu,
   /扣\s*扣/iu,
   /二\s*维\s*码|扫码/iu,
