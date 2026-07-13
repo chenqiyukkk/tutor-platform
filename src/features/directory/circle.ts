@@ -8,6 +8,23 @@ export type DirectoryViewer = {
   acceptsOnline: boolean;
 };
 
+export type DirectoryAccessContext = {
+  authenticated: boolean;
+  matchingViewer: DirectoryViewer | null;
+};
+
+export function createDirectoryAccessContext(
+  authenticated: boolean,
+  viewerCandidate: DirectoryViewer | null,
+): DirectoryAccessContext {
+  return {
+    authenticated,
+    matchingViewer: authenticated && viewerCandidate?.districtIds.length
+      ? viewerCandidate
+      : null,
+  };
+}
+
 type TeacherTarget = {
   id: string;
   subjectIds: readonly string[];
@@ -33,9 +50,8 @@ export function resolveTeacherCircleTier(
   viewer: DirectoryViewer,
   adjacentRegionPairs: readonly AdjacentRegionPair[],
 ) {
-  const viewerDistricts = viewer.districtIds.length
-    ? viewer.districtIds
-    : [{ districtId: null, isPrimary: true }];
+  if (!viewer.districtIds.length) return undefined;
+  const viewerDistricts = viewer.districtIds;
   const results = viewerDistricts.flatMap(({ districtId }) => {
     const result = scoreMatch(
       { ...teacher, subjectIds: ["directory-circle"] },
@@ -57,6 +73,7 @@ export function resolveRequestCircleTier(
   viewer: DirectoryViewer,
   adjacentRegionPairs: readonly AdjacentRegionPair[],
 ) {
+  if (!viewer.districtIds.length) return undefined;
   const result = scoreMatch(
     {
       id: "directory-viewer",

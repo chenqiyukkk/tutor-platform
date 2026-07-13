@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { resolveRequestCircleTier, resolveTeacherCircleTier } from "./circle";
+import { createDirectoryAccessContext, resolveRequestCircleTier, resolveTeacherCircleTier } from "./circle";
 
 const adjacent = [["viewer-region", "nearby-region"]] as const;
 
@@ -15,5 +15,15 @@ describe("directory circle tier", () => {
   it("uses the teacher service areas when a teacher views a request", () => {
     const viewer = { districtIds: [{ districtId: "viewer-region", isPrimary: true }], acceptsOnline: false };
     expect(resolveRequestCircleTier({ id: "request", subjectIds: [], districtId: "nearby-region", acceptsOnline: false }, viewer, adjacent)).toBe("ADJACENT_DISTRICT");
+  });
+
+  it("never creates online proximity from an authenticated account with no district", () => {
+    const noDistrict = { districtIds: [], acceptsOnline: true };
+    expect(resolveTeacherCircleTier({ id: "online-teacher", subjectIds: [], serviceAreas: [], acceptsOnline: true }, noDistrict, [])).toBeUndefined();
+    expect(resolveRequestCircleTier({ id: "online-request", subjectIds: [], districtId: "somewhere", acceptsOnline: true }, noDistrict, [])).toBeUndefined();
+    expect(createDirectoryAccessContext(true, noDistrict)).toEqual({
+      authenticated: true,
+      matchingViewer: null,
+    });
   });
 });

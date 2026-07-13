@@ -1,8 +1,8 @@
 import { directoryHandlers } from "@/features/directory/server";
 
 export async function GET(
-  _request: Request,
+  request: Request,
   { params }: { params: Promise<{ id: string }> },
 ) {
-  return directoryHandlers.teachers.detail((await params).id);
+  return directoryHandlers.teachers.detail(request, (await params).id);
 }

@@ -20,4 +20,11 @@ describe("CircleRibbon", () => {
     render(<CircleRibbon tier={tier} />);
     expect(screen.getByText(label)).toBeInTheDocument();
   });
+
+  it("distinguishes an authenticated account without a matching district", () => {
+    render(<CircleRibbon authenticated />);
+
+    expect(screen.getByText("完善地区后可查看你的圈层")).toBeInTheDocument();
+    expect(screen.queryByText("登录后可查看你的地区圈层")).not.toBeInTheDocument();
+  });
 });

@@ -1,7 +1,7 @@
 import { z } from "zod";
 
 const paginationShape = {
-  page: z.number().int().min(1).default(1),
+  page: z.number().int().min(1).max(10_000).default(1),
   pageSize: z.number().int().min(1).max(24).default(12),
 };
 

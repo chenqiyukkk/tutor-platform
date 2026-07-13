@@ -16,12 +16,11 @@ import {
 
 type DatabaseClient = PrismaClient | Prisma.TransactionClient;
 
-const teacherScalarSelect = {
+const teacherPreviewScalarSelect = {
   id: true,
   displayName: true,
   identityType: true,
   headline: true,
-  bio: true,
   yearsExperience: true,
   hourlyRate: true,
   hourlyRateMax: true,
@@ -29,18 +28,27 @@ const teacherScalarSelect = {
   publishedAt: true,
 } satisfies Prisma.TeacherProfileSelect;
 
-const requestScalarSelect = {
+const teacherDetailScalarSelect = {
+  ...teacherPreviewScalarSelect,
+  bio: true,
+} satisfies Prisma.TeacherProfileSelect;
+
+const requestPreviewScalarSelect = {
   id: true,
   title: true,
-  description: true,
   scheduleText: true,
   budgetMin: true,
   budgetMax: true,
   teachingMode: true,
-  publicLocationNote: true,
   publishedAt: true,
   studentProfileId: true,
   regionId: true,
+} satisfies Prisma.TutoringRequestSelect;
+
+const requestDetailScalarSelect = {
+  ...requestPreviewScalarSelect,
+  description: true,
+  publicLocationNote: true,
 } satisfies Prisma.TutoringRequestSelect;
 
 const teacherPublicBase: Prisma.TeacherProfileWhereInput = {
@@ -63,12 +71,13 @@ const teacherPublicBase: Prisma.TeacherProfileWhereInput = {
   },
 };
 
-function requestPublicBase(): Prisma.TutoringRequestWhereInput {
+function requestPublicBase(now = new Date()): Prisma.TutoringRequestWhereInput {
   return {
     status: "PUBLISHED",
     publishedAt: { not: null },
     title: { not: "" },
     description: { not: "" },
+    OR: [{ expiresAt: null }, { expiresAt: { gt: now } }],
     parentProfile: { account: { role: "PARENT", status: "ACTIVE" } },
     studentProfile: { is: { isActive: true } },
     region: { is: { isActive: true, level: 3 } },
@@ -95,10 +104,7 @@ function teacherWhere(query: TeacherDirectoryQuery): Prisma.TeacherProfileWhereI
 }
 
 function requestWhere(query: RequestDirectoryQuery, now = new Date()): Prisma.TutoringRequestWhereInput {
-  const filters: Prisma.TutoringRequestWhereInput[] = [
-    requestPublicBase(),
-    { OR: [{ expiresAt: null }, { expiresAt: { gt: now } }] },
-  ];
+  const filters: Prisma.TutoringRequestWhereInput[] = [requestPublicBase(now)];
   if (query.district) filters.push({ regionId: query.district });
   if (query.subject) filters.push({ subjects: { some: { subjectId: query.subject } } });
   if (query.mode === "ONLINE") filters.push({ teachingMode: { in: ["ONLINE", "BOTH"] } });
@@ -117,17 +123,19 @@ export type DirectoryPage<T> = {
 
 export interface DirectoryRepository {
   listTeachers(query: TeacherDirectoryQuery): Promise<DirectoryPage<PublicTeacherListItem>>;
-  getTeacher(id: string): Promise<PublicTeacherDetail | null>;
+  getTeacherPreview(id: string): Promise<PublicTeacherListItem | null>;
+  getTeacherDetail(id: string): Promise<PublicTeacherDetail | null>;
   listRequests(query: RequestDirectoryQuery): Promise<DirectoryPage<PublicRequestListItem>>;
-  getRequest(id: string): Promise<PublicRequestDetail | null>;
+  getRequestPreview(id: string): Promise<PublicRequestListItem | null>;
+  getRequestDetail(id: string): Promise<PublicRequestDetail | null>;
 }
 
 export class PrismaDirectoryRepository implements DirectoryRepository {
   constructor(private readonly prisma: PrismaClient) {}
 
-  private async hydrateTeachers(
+  private async hydrateTeachers<T extends Prisma.TeacherProfileGetPayload<{ select: typeof teacherPreviewScalarSelect }>>(
     client: DatabaseClient,
-    rows: Array<Prisma.TeacherProfileGetPayload<{ select: typeof teacherScalarSelect }>>,
+    rows: T[],
   ) {
     const profileIds = rows.map(({ id }) => id);
     if (!profileIds.length) return [];
@@ -189,9 +197,9 @@ export class PrismaDirectoryRepository implements DirectoryRepository {
     }));
   }
 
-  private async hydrateRequests(
+  private async hydrateRequests<T extends Prisma.TutoringRequestGetPayload<{ select: typeof requestPreviewScalarSelect }>>(
     client: DatabaseClient,
-    rows: Array<Prisma.TutoringRequestGetPayload<{ select: typeof requestScalarSelect }>>,
+    rows: T[],
   ) {
     const requestIds = rows.map(({ id }) => id);
     if (!requestIds.length) return [];
@@ -237,7 +245,7 @@ export class PrismaDirectoryRepository implements DirectoryRepository {
     return this.prisma.$transaction(async (transaction) => {
       const rows = await transaction.teacherProfile.findMany({
         where,
-        select: teacherScalarSelect,
+        select: teacherPreviewScalarSelect,
         orderBy: [{ publishedAt: "desc" }, { id: "asc" }],
         skip: (query.page - 1) * query.pageSize,
         take: query.pageSize,
@@ -253,14 +261,28 @@ export class PrismaDirectoryRepository implements DirectoryRepository {
     }, { isolationLevel: "RepeatableRead" });
   }
 
-  async getTeacher(id: string) {
-    const row = await this.prisma.teacherProfile.findFirst({
-      where: { AND: [teacherPublicBase, { id }] },
-      select: teacherScalarSelect,
-    });
-    if (!row) return null;
-    const [hydrated] = await this.hydrateTeachers(this.prisma, [row]);
-    return toPublicTeacherDetail(hydrated);
+  async getTeacherPreview(id: string) {
+    return this.prisma.$transaction(async (transaction) => {
+      const row = await transaction.teacherProfile.findFirst({
+        where: { AND: [teacherPublicBase, { id }] },
+        select: teacherPreviewScalarSelect,
+      });
+      if (!row) return null;
+      const [hydrated] = await this.hydrateTeachers(transaction, [row]);
+      return toPublicTeacherListItem(hydrated);
+    }, { isolationLevel: "RepeatableRead" });
+  }
+
+  async getTeacherDetail(id: string) {
+    return this.prisma.$transaction(async (transaction) => {
+      const row = await transaction.teacherProfile.findFirst({
+        where: { AND: [teacherPublicBase, { id }] },
+        select: teacherDetailScalarSelect,
+      });
+      if (!row) return null;
+      const [hydrated] = await this.hydrateTeachers(transaction, [row]);
+      return toPublicTeacherDetail(hydrated);
+    }, { isolationLevel: "RepeatableRead" });
   }
 
   async listRequests(query: RequestDirectoryQuery) {
@@ -268,7 +290,7 @@ export class PrismaDirectoryRepository implements DirectoryRepository {
     return this.prisma.$transaction(async (transaction) => {
       const rows = await transaction.tutoringRequest.findMany({
         where,
-        select: requestScalarSelect,
+        select: requestPreviewScalarSelect,
         orderBy: [{ publishedAt: "desc" }, { id: "asc" }],
         skip: (query.page - 1) * query.pageSize,
         take: query.pageSize,
@@ -284,13 +306,27 @@ export class PrismaDirectoryRepository implements DirectoryRepository {
     }, { isolationLevel: "RepeatableRead" });
   }
 
-  async getRequest(id: string) {
-    const row = await this.prisma.tutoringRequest.findFirst({
-      where: { AND: [requestPublicBase(), { id }] },
-      select: requestScalarSelect,
-    });
-    if (!row) return null;
-    const [hydrated] = await this.hydrateRequests(this.prisma, [row]);
-    return toPublicRequestDetail(hydrated);
+  async getRequestPreview(id: string) {
+    return this.prisma.$transaction(async (transaction) => {
+      const row = await transaction.tutoringRequest.findFirst({
+        where: { AND: [requestPublicBase(), { id }] },
+        select: requestPreviewScalarSelect,
+      });
+      if (!row) return null;
+      const [hydrated] = await this.hydrateRequests(transaction, [row]);
+      return toPublicRequestListItem(hydrated);
+    }, { isolationLevel: "RepeatableRead" });
+  }
+
+  async getRequestDetail(id: string) {
+    return this.prisma.$transaction(async (transaction) => {
+      const row = await transaction.tutoringRequest.findFirst({
+        where: { AND: [requestPublicBase(), { id }] },
+        select: requestDetailScalarSelect,
+      });
+      if (!row) return null;
+      const [hydrated] = await this.hydrateRequests(transaction, [row]);
+      return toPublicRequestDetail(hydrated);
+    }, { isolationLevel: "RepeatableRead" });
   }
 }

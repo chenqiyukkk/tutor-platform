@@ -10,6 +10,7 @@ vi.mock("server-only", () => ({}));
 
 import { PrismaDirectoryRepository } from "./repository";
 import { createDirectoryHandlers } from "./route-handler";
+import { findAdjacentRegionPairs } from "./adjacency";
 
 if (!process.env.DATABASE_URL && existsSync(".env")) loadEnvFile(".env");
 if (!process.env.DATABASE_URL) throw new Error("DATABASE_URL is required for directory integration tests");
@@ -27,6 +28,8 @@ describe("Prisma public directory repository", () => {
   let visibleRequestId = "";
   let activeSubjectId = "";
   let activeRegionId = "";
+  let canonicalAdjacentPair: [string, string] = ["", ""];
+  let expiredRequestId = "";
 
   async function account(role: "TEACHER" | "PARENT", label: string, status: "ACTIVE" | "DISABLED" = "ACTIVE") {
     const created = await prisma.account.create({ data: {
@@ -64,8 +67,16 @@ describe("Prisma public directory repository", () => {
     const inactiveRegion = await prisma.region.create({ data: {
       code: `DIRECTORY-INACTIVE-${marker}`, name: `停用测试区-${marker}`, level: 3, isActive: false,
     } });
-    regionIds.push(activeRegion.id, inactiveRegion.id);
+    const adjacentRegion = await prisma.region.create({ data: {
+      code: `DIRECTORY-ADJACENT-${marker}`, name: `相邻测试区-${marker}`, level: 3,
+    } });
+    regionIds.push(activeRegion.id, inactiveRegion.id, adjacentRegion.id);
     activeRegionId = activeRegion.id;
+    canonicalAdjacentPair = [activeRegion.id, adjacentRegion.id].sort() as [string, string];
+    await prisma.regionAdjacency.create({ data: {
+      regionAId: canonicalAdjacentPair[0],
+      regionBId: canonicalAdjacentPair[1],
+    } });
     const publishedAt = new Date("2026-07-01T08:00:00.000Z");
 
     const visibleAccount = await account("TEACHER", "visible-teacher");
@@ -101,15 +112,27 @@ describe("Prisma public directory repository", () => {
       serviceAreas: { create: { regionId: activeRegion.id, isPrimary: true } },
     } });
     const disabledAccount = await account("TEACHER", "disabled-teacher", "DISABLED");
-    await prisma.teacherProfile.create({ data: {
-      accountId: disabledAccount.id, displayName: "停用教师", status: "PUBLISHED", publishedAt,
+    const disabledTeacher = await prisma.teacherProfile.create({ data: {
+      accountId: disabledAccount.id, displayName: "停用教师", identityType: "FULL_TIME_TEACHER",
+      bio: "除账号状态外均完整", yearsExperience: 5, hourlyRate: 100, hourlyRateMax: 180,
+      status: "PUBLISHED", publishedAt,
       subjects: { create: { subjectId: activeSubject.id } },
       serviceAreas: { create: { regionId: activeRegion.id, isPrimary: true } },
     } });
-    const invalidRelationAccount = await account("TEACHER", "invalid-relation-teacher");
-    await prisma.teacherProfile.create({ data: {
-      accountId: invalidRelationAccount.id, displayName: "关联停用教师", status: "PUBLISHED", publishedAt,
+    const inactiveSubjectAccount = await account("TEACHER", "inactive-subject-teacher");
+    const inactiveSubjectTeacher = await prisma.teacherProfile.create({ data: {
+      accountId: inactiveSubjectAccount.id, displayName: "科目停用教师", identityType: "FULL_TIME_TEACHER",
+      bio: "除科目状态外均完整", yearsExperience: 5, hourlyRate: 100, hourlyRateMax: 180,
+      status: "PUBLISHED", publishedAt,
       subjects: { create: { subjectId: inactiveSubject.id } },
+      serviceAreas: { create: { regionId: activeRegion.id, isPrimary: true } },
+    } });
+    const inactiveRegionAccount = await account("TEACHER", "inactive-region-teacher");
+    const inactiveRegionTeacher = await prisma.teacherProfile.create({ data: {
+      accountId: inactiveRegionAccount.id, displayName: "地区停用教师", identityType: "FULL_TIME_TEACHER",
+      bio: "除地区状态外均完整", yearsExperience: 5, hourlyRate: 100, hourlyRateMax: 180,
+      status: "PUBLISHED", publishedAt,
+      subjects: { create: { subjectId: activeSubject.id } },
       serviceAreas: { create: { regionId: inactiveRegion.id, isPrimary: true } },
     } });
 
@@ -144,11 +167,28 @@ describe("Prisma public directory repository", () => {
       title: "草稿需求", description: "不应公开", status: "DRAFT",
       subjects: { create: { subjectId: activeSubject.id } },
     } });
-    await prisma.tutoringRequest.create({ data: {
-      parentProfileId: parentProfile.id, studentProfileId: student.id, regionId: inactiveRegion.id,
-      title: "停用关联需求", description: "不应公开", status: "PUBLISHED", publishedAt,
+    const inactiveSubjectRequest = await prisma.tutoringRequest.create({ data: {
+      parentProfileId: parentProfile.id, studentProfileId: student.id, regionId: activeRegion.id,
+      title: "科目停用需求", description: "除科目状态外均完整", scheduleText: "周六",
+      budgetMin: 10000, budgetMax: 16000, teachingMode: "BOTH",
+      status: "PUBLISHED", publishedAt,
       subjects: { create: { subjectId: inactiveSubject.id } },
     } });
+    const inactiveRegionRequest = await prisma.tutoringRequest.create({ data: {
+      parentProfileId: parentProfile.id, studentProfileId: student.id, regionId: inactiveRegion.id,
+      title: "地区停用需求", description: "除地区状态外均完整", scheduleText: "周六",
+      budgetMin: 10000, budgetMax: 16000, teachingMode: "BOTH",
+      status: "PUBLISHED", publishedAt,
+      subjects: { create: { subjectId: activeSubject.id } },
+    } });
+    const expiredRequest = await prisma.tutoringRequest.create({ data: {
+      parentProfileId: parentProfile.id, studentProfileId: student.id, regionId: activeRegion.id,
+      title: "已过期需求", description: "除过期时间外均完整", scheduleText: "周六",
+      budgetMin: 10000, budgetMax: 16000, teachingMode: "BOTH",
+      status: "PUBLISHED", publishedAt, expiresAt: new Date("2026-01-01T00:00:00.000Z"),
+      subjects: { create: { subjectId: activeSubject.id } },
+    } });
+    expiredRequestId = expiredRequest.id;
 
     const teachers = await repository.listTeachers({
       page: 1, pageSize: 12,
@@ -164,6 +204,9 @@ describe("Prisma public directory repository", () => {
       publicNickname: `林老师-${marker}`,
       verified: true,
     });
+    expect(teachers.items.map(({ id }) => id)).not.toEqual(expect.arrayContaining([
+      disabledTeacher.id, inactiveSubjectTeacher.id, inactiveRegionTeacher.id,
+    ]));
     expect(requests.total).toBe(1);
     expect(requests.items).toHaveLength(1);
     expect(requests.items[0]).toMatchObject({
@@ -171,6 +214,9 @@ describe("Prisma public directory repository", () => {
       studentAlias: "小树",
       gradeLevel: "GRADE_8",
     });
+    expect(requests.items.map(({ id }) => id)).not.toEqual(expect.arrayContaining([
+      inactiveSubjectRequest.id, inactiveRegionRequest.id, expiredRequest.id,
+    ]));
     const payload = JSON.stringify({ teachers, requests });
     expect(payload).not.toContain("@private.example");
     expect(payload).not.toContain("private-password");
@@ -230,16 +276,21 @@ describe("Prisma public directory repository", () => {
   });
 
   it("returns null for missing or non-public details and detailed safe DTOs for public records", async () => {
-    await expect(repository.getTeacher(crypto.randomUUID())).resolves.toBeNull();
-    await expect(repository.getRequest(crypto.randomUUID())).resolves.toBeNull();
-    await expect(repository.getTeacher(visibleTeacherId)).resolves.toMatchObject({
+    await expect(repository.getTeacherPreview(crypto.randomUUID())).resolves.toBeNull();
+    await expect(repository.getRequestPreview(crypto.randomUUID())).resolves.toBeNull();
+    await expect(repository.getTeacherPreview(visibleTeacherId)).resolves.not.toHaveProperty("bio");
+    await expect(repository.getTeacherDetail(visibleTeacherId)).resolves.toMatchObject({
       id: visibleTeacherId, bio: "公开教学简介",
     });
-    await expect(repository.getRequest(visibleRequestId)).resolves.toMatchObject({
+    await expect(repository.getRequestPreview(visibleRequestId)).resolves.not.toHaveProperty("description");
+    await expect(repository.getRequestPreview(visibleRequestId)).resolves.not.toHaveProperty("publicLocationNote");
+    await expect(repository.getRequestDetail(visibleRequestId)).resolves.toMatchObject({
       id: visibleRequestId,
       description: "希望梳理几何基础",
       publicLocationNote: "五道口商圈附近",
     });
+    await expect(repository.getRequestPreview(expiredRequestId)).resolves.toBeNull();
+    await expect(repository.getRequestDetail(expiredRequestId)).resolves.toBeNull();
   });
 
   it("rejects invalid, repeated, and unknown API queries before a real repository call", async () => {
@@ -249,5 +300,11 @@ describe("Prisma public directory repository", () => {
       expect(response.status).toBe(400);
       await expect(response.json()).resolves.toMatchObject({ code: "INVALID_QUERY" });
     }
+  });
+
+  it("loads deterministic neighboring districts from real database context", async () => {
+    await expect(findAdjacentRegionPairs(prisma, [activeRegionId])).resolves.toEqual([
+      canonicalAdjacentPair,
+    ]);
   });
 });

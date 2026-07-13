@@ -26,9 +26,11 @@ describe("directory query parsing", () => {
 
   it.each([
     "unknown=value",
+    "district=",
     "page=1&page=2",
     "identityType=NOT_REAL",
     "pageSize=25",
+    "page=10001",
     "budgetMin=200&budgetMax=100",
     "mode=BOTH",
   ])("rejects invalid teacher query %s", (search) => {

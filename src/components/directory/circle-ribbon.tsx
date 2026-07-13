@@ -6,10 +6,18 @@ const labels: Record<DirectoryCircleTier, string> = {
   ONLINE: "线上匹配",
 };
 
-export function CircleRibbon({ tier }: { tier?: DirectoryCircleTier }) {
+export function CircleRibbon({
+  authenticated = false,
+  tier,
+}: {
+  authenticated?: boolean;
+  tier?: DirectoryCircleTier;
+}) {
   return tier ? (
     <span className={`circle-ribbon circle-ribbon--${tier.toLowerCase()}`}>{labels[tier]}</span>
   ) : (
-    <span className="circle-ribbon circle-ribbon--guest">登录后可查看你的地区圈层</span>
+    <span className="circle-ribbon circle-ribbon--guest">
+      {authenticated ? "完善地区后可查看你的圈层" : "登录后可查看你的地区圈层"}
+    </span>
   );
 }

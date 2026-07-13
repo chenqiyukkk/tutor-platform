@@ -6,7 +6,7 @@ import { FilterBar } from "@/components/directory/filter-bar";
 import { EmptyState } from "@/components/ui/empty-state";
 import { Pagination } from "@/components/ui/pagination";
 import { resolveTeacherCircleTier, type DirectoryCircleTier } from "@/features/directory/circle";
-import { getAdjacentRegionPairs, getDirectoryFilterOptions, getDirectoryViewerContext } from "@/features/directory/personalization";
+import { getAdjacentRegionPairs, getDirectoryAccessContext, getDirectoryFilterOptions } from "@/features/directory/personalization";
 import { DirectoryQueryError, parseTeacherDirectoryQuery } from "@/features/directory/query";
 import { directoryRepository } from "@/features/directory/server";
 
@@ -53,7 +53,8 @@ export default async function TeachersPage({ searchParams: incoming }: { searchP
   const result = invalidMessage
     ? { items: [], total: 0, page: 1, pageSize: query.pageSize }
     : await directoryRepository.listTeachers(query);
-  const viewer = await getDirectoryViewerContext("parent");
+  const access = await getDirectoryAccessContext("parent");
+  const viewer = access.matchingViewer;
   const tiers = new Map<string, DirectoryCircleTier>();
   if (viewer) {
     const targetDistricts = result.items.flatMap(({ serviceAreas }) => serviceAreas.map(({ id }) => id));
@@ -80,7 +81,7 @@ export default async function TeachersPage({ searchParams: incoming }: { searchP
           <p className="eyebrow">家长找老师</p>
           <h1>一页一页，认真看看谁适合孩子</h1>
           <p>只展示已发布、账号正常且地区科目仍有效的资料。公开位置止于区县，不展示联系方式。</p>
-          {!viewer ? <CircleRibbon /> : <p className="directory-hero__personalized">已按你的最近地区信息标记圈层</p>}
+          {viewer ? <p className="directory-hero__personalized">已按你的最近地区信息标记圈层</p> : <CircleRibbon authenticated={access.authenticated} />}
         </div>
       </header>
       <div className="site-container directory-layout">

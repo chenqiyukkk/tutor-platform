@@ -9,7 +9,6 @@ export type PublicTeacherRow = {
   displayName: string;
   identityType: "UNIVERSITY_STUDENT" | "FULL_TIME_TEACHER" | "OTHER" | null;
   headline: string | null;
-  bio: string | null;
   yearsExperience: number | null;
   hourlyRate: DecimalLike | null;
   hourlyRateMax: DecimalLike | null;
@@ -20,19 +19,24 @@ export type PublicTeacherRow = {
   verifications: Array<{ id: string }>;
 };
 
+export type PublicTeacherDetailRow = PublicTeacherRow & { bio: string | null };
+
 export type PublicRequestRow = {
   id: string;
   title: string;
-  description: string;
   scheduleText: string | null;
   budgetMin: number | null;
   budgetMax: number | null;
   teachingMode: "OFFLINE" | "ONLINE" | "BOTH" | null;
-  publicLocationNote: string | null;
   publishedAt: Date | null;
   studentProfile: { displayName: string; gradeLevel: string | null } | null;
   region: PublicRegion | null;
   subjects: Array<{ subject: PublicSubject }>;
+};
+
+export type PublicRequestDetailRow = PublicRequestRow & {
+  description: string;
+  publicLocationNote: string | null;
 };
 
 function cents(value: DecimalLike | null) {
@@ -64,7 +68,7 @@ export function toPublicTeacherListItem(row: PublicTeacherRow) {
   };
 }
 
-export function toPublicTeacherDetail(row: PublicTeacherRow) {
+export function toPublicTeacherDetail(row: PublicTeacherDetailRow) {
   return { ...toPublicTeacherListItem(row), bio: row.bio };
 }
 
@@ -84,7 +88,7 @@ export function toPublicRequestListItem(row: PublicRequestRow) {
   };
 }
 
-export function toPublicRequestDetail(row: PublicRequestRow) {
+export function toPublicRequestDetail(row: PublicRequestDetailRow) {
   return {
     ...toPublicRequestListItem(row),
     description: row.description,

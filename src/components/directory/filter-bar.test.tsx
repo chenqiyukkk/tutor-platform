@@ -1,4 +1,5 @@
 import { render, screen } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
 
 import { FilterBar } from "./filter-bar";
 
@@ -32,5 +33,25 @@ describe("FilterBar", () => {
 
     expect(screen.getByRole("form", { name: "筛选家教需求" })).toHaveAttribute("action", "/requests");
     expect(screen.queryByLabelText("教师身份")).not.toBeInTheDocument();
+  });
+
+  it("submits no query entries when every native GET control is empty", () => {
+    render(<FilterBar kind="teachers" options={options} values={{}} />);
+    const form = screen.getByRole("form", { name: "筛选老师" }) as HTMLFormElement;
+
+    expect([...new FormData(form).entries()]).toEqual([]);
+  });
+
+  it("submits only non-empty controls after a partial selection", async () => {
+    const user = userEvent.setup();
+    render(<FilterBar kind="teachers" options={options} values={{}} />);
+    await user.selectOptions(screen.getByLabelText("地区"), "region-id");
+    await user.type(screen.getByLabelText("预算下限（分/小时）"), "10000");
+    const form = screen.getByRole("form", { name: "筛选老师" }) as HTMLFormElement;
+
+    expect([...new FormData(form).entries()]).toEqual([
+      ["district", "region-id"],
+      ["budgetMin", "10000"],
+    ]);
   });
 });

@@ -4,19 +4,28 @@ import { describe, expect, it } from "vitest";
 
 import { createDirectoryHandlers } from "./route-handler";
 import type { DirectoryRepository } from "./repository";
+import type { RequestDirectoryQuery, TeacherDirectoryQuery } from "./query";
+
+const teacherPreview = { id: "11111111-1111-4111-8111-111111111111", publicNickname: "林老师" };
+const requestPreview = { id: "22222222-2222-4222-8222-222222222222", title: "初二数学" };
 
 function repositoryStub(): DirectoryRepository {
   return {
-    async listTeachers(query) {
+    async listTeachers(query: TeacherDirectoryQuery) {
       return { items: [], total: 0, page: query.page, pageSize: query.pageSize };
     },
-    async getTeacher() { return null; },
-    async listRequests(query) {
+    async getTeacherPreview(id: string) { return id === teacherPreview.id ? teacherPreview : null; },
+    async getTeacherDetail(id: string) { return id === teacherPreview.id ? { ...teacherPreview, bio: "认证家长可见的教师自述" } : null; },
+    async listRequests(query: RequestDirectoryQuery) {
       return { items: [], total: 0, page: query.page, pageSize: query.pageSize };
     },
-    async getRequest() { return null; },
-  };
+    async getRequestPreview(id: string) { return id === requestPreview.id ? requestPreview : null; },
+    async getRequestDetail(id: string) { return id === requestPreview.id ? { ...requestPreview, description: "认证教师可见的需求详情", publicLocationNote: "商圈附近" } : null; },
+  } as unknown as DirectoryRepository;
 }
+
+const authenticateDetail = async (request: Request, role: "parent" | "teacher") =>
+  request.headers.get("x-session-role") === role;
 
 describe("public directory route handlers", () => {
   it.each([
@@ -46,12 +55,39 @@ describe("public directory route handlers", () => {
 
   it("returns 404 for absent details and rejects malformed public ids", async () => {
     const handlers = createDirectoryHandlers(repositoryStub());
-    const missing = await handlers.requests.detail("11111111-1111-4111-8111-111111111111");
-    const malformed = await handlers.teachers.detail("not-a-uuid");
+    const request = new Request("https://example.test");
+    const missing = await handlers.requests.detail(request, "11111111-1111-4111-8111-111111111111");
+    const malformed = await handlers.teachers.detail(request, "not-a-uuid");
 
     expect(missing.status).toBe(404);
     await expect(missing.json()).resolves.toMatchObject({ code: "NOT_FOUND" });
     expect(malformed.status).toBe(400);
     await expect(malformed.json()).resolves.toMatchObject({ code: "INVALID_QUERY" });
+  });
+
+  it("returns only teacher preview anonymously or to the wrong role, and detail to a parent session", async () => {
+    const handlers = createDirectoryHandlers(repositoryStub(), authenticateDetail);
+    const anonymous = await handlers.teachers.detail(new Request("https://example.test"), teacherPreview.id);
+    const wrongRole = await handlers.teachers.detail(new Request("https://example.test", { headers: { "x-session-role": "teacher" } }), teacherPreview.id);
+    const parent = await handlers.teachers.detail(new Request("https://example.test", { headers: { "x-session-role": "parent" } }), teacherPreview.id);
+
+    await expect(anonymous.json()).resolves.toEqual({ access: "preview", teacher: teacherPreview });
+    await expect(wrongRole.json()).resolves.toEqual({ access: "preview", teacher: teacherPreview });
+    await expect(parent.json()).resolves.toEqual({
+      access: "detail",
+      teacher: { ...teacherPreview, bio: "认证家长可见的教师自述" },
+    });
+  });
+
+  it("returns request detail only to a teacher session", async () => {
+    const handlers = createDirectoryHandlers(repositoryStub(), authenticateDetail);
+    const anonymous = await handlers.requests.detail(new Request("https://example.test"), requestPreview.id);
+    const teacher = await handlers.requests.detail(new Request("https://example.test", { headers: { "x-session-role": "teacher" } }), requestPreview.id);
+
+    await expect(anonymous.json()).resolves.toEqual({ access: "preview", request: requestPreview });
+    await expect(teacher.json()).resolves.toEqual({
+      access: "detail",
+      request: { ...requestPreview, description: "认证教师可见的需求详情", publicLocationNote: "商圈附近" },
+    });
   });
 });

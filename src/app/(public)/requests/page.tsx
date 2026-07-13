@@ -6,7 +6,7 @@ import { FilterBar } from "@/components/directory/filter-bar";
 import { EmptyState } from "@/components/ui/empty-state";
 import { Pagination } from "@/components/ui/pagination";
 import { resolveRequestCircleTier, type DirectoryCircleTier } from "@/features/directory/circle";
-import { getAdjacentRegionPairs, getDirectoryFilterOptions, getDirectoryViewerContext } from "@/features/directory/personalization";
+import { getAdjacentRegionPairs, getDirectoryAccessContext, getDirectoryFilterOptions } from "@/features/directory/personalization";
 import { DirectoryQueryError, parseRequestDirectoryQuery } from "@/features/directory/query";
 import { directoryRepository } from "@/features/directory/server";
 
@@ -33,7 +33,8 @@ export default async function RequestsPage({ searchParams }: { searchParams: Pro
     query = parseRequestDirectoryQuery(new URLSearchParams());
   }
   const result = invalidMessage ? { items: [], total: 0, page: 1, pageSize: query.pageSize } : await directoryRepository.listRequests(query);
-  const viewer = await getDirectoryViewerContext("teacher");
+  const access = await getDirectoryAccessContext("teacher");
+  const viewer = access.matchingViewer;
   const tiers = new Map<string, DirectoryCircleTier>();
   if (viewer) {
     const adjacent = await getAdjacentRegionPairs([...viewer.districtIds.map(({ districtId }) => districtId), ...result.items.flatMap(({ region }) => region ? [region.id] : [])]);
@@ -44,7 +45,7 @@ export default async function RequestsPage({ searchParams }: { searchParams: Pro
   }
   return (
     <main className="directory-page directory-page--requests" id="main-content">
-      <header className="directory-hero"><div className="site-container directory-hero__inner"><p className="eyebrow">老师找学生</p><h1>真实需求，留给真正合适的人回应</h1><p>这里不公开家长身份、联系方式或学生内部备注，只呈现选择家教所需的信息。</p>{!viewer ? <CircleRibbon /> : <p className="directory-hero__personalized">已按你的授课地区标记圈层</p>}</div></header>
+      <header className="directory-hero"><div className="site-container directory-hero__inner"><p className="eyebrow">老师找学生</p><h1>真实需求，留给真正合适的人回应</h1><p>这里不公开家长身份、联系方式或学生内部备注，只呈现选择家教所需的信息。</p>{viewer ? <p className="directory-hero__personalized">已按你的授课地区标记圈层</p> : <CircleRibbon authenticated={access.authenticated} />}</div></header>
       <div className="site-container directory-layout">
         <aside><FilterBar kind="requests" options={options} values={query} /></aside>
         <section aria-labelledby="request-results-title" className="directory-results">
