@@ -11,6 +11,7 @@ const profile: TeacherProfile = {
   id: "99999999-9999-4999-8999-999999999999",
   accountId: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
   publicNickname: "林老师",
+  headline: "帮学生建立数学思维",
   identityType: "FULL_TIME_TEACHER",
   bio: "十年一线教学经验，重视学习方法与思维习惯。",
   yearsExperience: 10,
@@ -43,6 +44,8 @@ describe("ProfileForm", () => {
 
     await userEvent.clear(screen.getByLabelText("公开昵称"));
     await userEvent.type(screen.getByLabelText("公开昵称"), "新昵称");
+    await userEvent.clear(screen.getByLabelText("公开标题"));
+    await userEvent.type(screen.getByLabelText("公开标题"), "专注几何启发");
     await userEvent.click(screen.getByRole("button", { name: "保存草稿" }));
 
     await waitFor(() => expect(fetchMock).toHaveBeenCalledWith(
@@ -54,6 +57,7 @@ describe("ProfileForm", () => {
     const body = JSON.parse(saveCall?.[1].body as string);
     expect(body).toMatchObject({
       publicNickname: "新昵称",
+      headline: "专注几何启发",
       subjectIds: [subject.id],
       primaryRegionId: profile.primaryRegion?.id,
     });

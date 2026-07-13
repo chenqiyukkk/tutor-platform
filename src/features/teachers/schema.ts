@@ -20,6 +20,7 @@ const uuid = z.string().uuid("请选择有效选项");
 
 export const teacherProfileDraftSchema = z.object({
   publicNickname: optionalTrimmedText(40, "公开昵称不能超过 40 个字符"),
+  headline: optionalTrimmedText(160, "公开标题不能超过 160 个字符"),
   identityType: z.enum(teacherIdentityTypes).nullable().optional(),
   bio: optionalTrimmedText(2_000, "个人简介不能超过 2000 个字符"),
   yearsExperience: z.number()

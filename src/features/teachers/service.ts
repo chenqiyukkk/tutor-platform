@@ -1,4 +1,5 @@
 import { ZodError } from "zod";
+import { contactPolicyMessage, violatesContactPolicy } from "@/features/safety/contact-policy";
 
 import {
   teacherProfileDraftSchema,
@@ -12,6 +13,7 @@ export type TeacherProfile = {
   id: string;
   accountId: string;
   publicNickname: string;
+  headline: string | null;
   identityType: TeacherIdentityType | null;
   bio: string | null;
   yearsExperience: number | null;
@@ -36,6 +38,7 @@ export function toTeacherProfileDto(profile: TeacherProfile): TeacherProfileDto 
 
 export type SavedTeacherProfile = {
   publicNickname: string;
+  headline: string | null;
   identityType: TeacherIdentityType | null;
   bio: string | null;
   yearsExperience: number | null;
@@ -101,6 +104,7 @@ function normalizeDraft(input: TeacherProfileDraftInput): SavedTeacherProfile {
   if (!parsed.success) throw validationError(parsed.error);
   return {
     publicNickname: parsed.data.publicNickname ?? "",
+    headline: parsed.data.headline || null,
     identityType: parsed.data.identityType ?? null,
     bio: parsed.data.bio || null,
     yearsExperience: parsed.data.yearsExperience ?? null,
@@ -115,6 +119,7 @@ function normalizeDraft(input: TeacherProfileDraftInput): SavedTeacherProfile {
 
 const completionItems = [
   ["publicNickname", "公开昵称", (profile: TeacherProfile) => profile.publicNickname.trim().length >= 2],
+  ["headline", "公开标题", (profile: TeacherProfile) => (profile.headline?.trim().length ?? 0) > 0],
   ["identityType", "身份类型", (profile: TeacherProfile) => profile.identityType !== null],
   ["bio", "个人简介", (profile: TeacherProfile) => (profile.bio?.trim().length ?? 0) >= 20],
   ["yearsExperience", "教学年限", (profile: TeacherProfile) => profile.yearsExperience !== null],
@@ -137,8 +142,14 @@ export function validatePublishable(profile: TeacherProfile) {
   for (const [field, label, isComplete] of completionItems) {
     if (!isComplete(profile)) errors[field] = [`请完善${label}`];
   }
+  for (const [field, text] of [["publicNickname", profile.publicNickname], ["headline", profile.headline], ["bio", profile.bio]] as const) {
+    if (violatesContactPolicy(text)) errors[field] = [contactPolicyMessage];
+  }
   if (profile.publicNickname.length > 40) {
     errors.publicNickname = ["公开昵称不能超过 40 个字符"];
+  }
+  if ((profile.headline?.length ?? 0) > 160) {
+    errors.headline = ["公开标题不能超过 160 个字符"];
   }
   if ((profile.bio?.length ?? 0) > 2_000) {
     errors.bio = ["个人简介不能超过 2000 个字符"];

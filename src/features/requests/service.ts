@@ -1,4 +1,5 @@
 import { ZodError } from "zod";
+import { contactPolicyMessage, violatesContactPolicy } from "@/features/safety/contact-policy";
 
 import { requestDraftSchema, studentInputSchema, type RequestDraftInput, type StudentInput } from "./schema";
 
@@ -100,6 +101,14 @@ export function validatePublishable(request: TutoringRequest) {
   if (!request.teachingMode) errors.teachingMode = ["请选择授课方式"];
   if (!request.scheduleText?.trim()) errors.scheduleText = ["请填写可授课时间"];
   if (!request.publicLocationNote?.trim()) errors.publicLocationNote = ["请填写区县内的大致位置"];
+  for (const [field, text] of [
+    ["studentId", request.student?.publicAlias],
+    ["scheduleText", request.scheduleText],
+    ["publicLocationNote", request.publicLocationNote],
+    ["description", request.description],
+  ] as const) {
+    if (violatesContactPolicy(text)) errors[field] = [contactPolicyMessage];
+  }
   return errors;
 }
 

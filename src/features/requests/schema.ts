@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { violatesContactPolicy } from "@/features/safety/contact-policy";
 
 export const teachingModes = ["OFFLINE", "ONLINE", "BOTH"] as const;
 export const grades = [
@@ -42,6 +43,7 @@ export const requestDraftSchema = z.object({
     preciseAddress.test(value.publicLocationNote) ||
     exactSchoolPoint.test(value.publicLocationNote) ||
     formattedPhone.test(value.publicLocationNote) ||
+    violatesContactPolicy(value.publicLocationNote) ||
     /门牌|房间|宿舍/.test(value.publicLocationNote)
   )) {
     context.addIssue({ code: "custom", path: ["publicLocationNote"], message: "只能填写区县内的大致位置，请勿填写门牌、学校入口、房间或联系电话" });

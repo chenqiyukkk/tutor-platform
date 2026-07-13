@@ -3,6 +3,12 @@ import { describe, expect, it, vi } from "vitest";
 
 import { GreetingInbox } from "./greeting-inbox";
 
+function deferred<T>() {
+  let resolve!: (value: T) => void;
+  const promise = new Promise<T>((resolvePromise) => { resolve = resolvePromise; });
+  return { promise, resolve };
+}
+
 describe("GreetingInbox", () => {
   it("renders loading then empty state", async () => {
     vi.stubGlobal("fetch", vi.fn(async () => new Response(JSON.stringify({ items: [], total: 0, page: 1, pageSize: 20 }), { status: 200 })));
@@ -68,5 +74,67 @@ describe("GreetingInbox", () => {
       "/api/greetings/00000000-0000-4000-8000-000000000001?realm=parent",
       expect.objectContaining({ method: "POST" }),
     );
+  });
+
+  it("disables actions and ignores a deferred action refresh after the user switches boxes", async () => {
+    const actionResponse = deferred<Response>();
+    const reads: string[] = [];
+    const fetchMock = vi.fn<(input: RequestInfo | URL, init?: RequestInit) => Promise<Response>>(async (input, init) => {
+      const url = String(input);
+      if (init?.method === "POST") return actionResponse.promise;
+      reads.push(url);
+      if (url.includes("box=sent")) return Response.json({ items: [], pageSize: 20, nextCursor: null });
+      return Response.json({
+        items: [{
+          id: "00000000-0000-4000-8000-000000000001", direction: "received", status: "PENDING",
+          note: "", card: { legacy: true }, createdAt: "2026-07-13T06:00:00.000Z",
+        }],
+        pageSize: 20,
+        nextCursor: null,
+      });
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    render(<GreetingInbox realm="parent" />);
+
+    fireEvent.click(await screen.findByRole("button", { name: "婉拒" }));
+    expect(screen.getByRole("button", { name: "接受" })).toBeDisabled();
+    expect(screen.getByRole("button", { name: "婉拒" })).toBeDisabled();
+    fireEvent.click(screen.getByRole("tab", { name: "发出的" }));
+    await screen.findByText("还没有发出打招呼");
+
+    actionResponse.resolve(Response.json({ greeting: { status: "REJECTED" } }));
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(screen.getByText("还没有发出打招呼")).toBeInTheDocument();
+    expect(reads.filter((url) => url.includes("box=received"))).toHaveLength(1);
+  });
+
+  it("collects report reasons in an accessible dialog instead of a browser prompt", async () => {
+    const fetchMock = vi.fn<(input: RequestInfo | URL, init?: RequestInit) => Promise<Response>>(async (_input, init) => {
+      if (init?.method === "POST") return Response.json({ greeting: { status: "REPORTED" } });
+      return Response.json({
+        items: [{
+          id: "00000000-0000-4000-8000-000000000001", direction: "received", status: "PENDING",
+          note: "", card: { legacy: true }, createdAt: "2026-07-13T06:00:00.000Z",
+        }],
+        pageSize: 20,
+        nextCursor: null,
+      });
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    render(<GreetingInbox realm="parent" />);
+
+    fireEvent.click(await screen.findByRole("button", { name: "举报" }));
+    const dialog = screen.getByRole("dialog", { name: "请说明举报原因" });
+    expect(dialog).toHaveAttribute("aria-modal", "true");
+    fireEvent.change(screen.getByLabelText("举报原因"), { target: { value: "疑似不当信息" } });
+    fireEvent.click(screen.getByRole("button", { name: "确认举报" }));
+
+    await waitFor(() => expect(fetchMock).toHaveBeenCalledWith(
+      "/api/greetings/00000000-0000-4000-8000-000000000001?realm=parent",
+      expect.objectContaining({
+        method: "POST",
+        body: JSON.stringify({ action: "report", reason: "疑似不当信息" }),
+      }),
+    ));
   });
 });

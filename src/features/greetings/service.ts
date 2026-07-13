@@ -3,6 +3,7 @@ import "server-only";
 import { Prisma, type PrismaClient, type TeacherProfile, type TutoringRequest } from "@prisma/client";
 
 import type { AuthenticatedAccount } from "@/features/auth/service";
+import { violatesContactPolicy } from "@/features/safety/contact-policy";
 
 import { greetingCardSnapshotSchema, type CurrentGreetingCardSnapshot } from "./card-schema";
 
@@ -110,6 +111,14 @@ function utcDayRange(now: Date) {
 
 async function advisoryLock(transaction: Prisma.TransactionClient, key: string) {
   await transaction.$queryRaw`SELECT 1::int AS locked FROM pg_advisory_xact_lock(hashtextextended(${key}, 0))`;
+}
+
+function accountPairKey(leftAccountId: string, rightAccountId: string) {
+  return `greeting-pair:${[leftAccountId, rightAccountId].sort().join(":")}`;
+}
+
+async function lockAccountPair(transaction: Prisma.TransactionClient, leftAccountId: string, rightAccountId: string) {
+  await advisoryLock(transaction, accountPairKey(leftAccountId, rightAccountId));
 }
 
 async function lockPublicContext(
@@ -301,7 +310,7 @@ function toDto(row: GreetingDtoRow, viewerId?: string) {
     id: row.id,
     direction: viewerId ? (row.senderAccountId === viewerId ? "sent" as const : "received" as const) : undefined,
     status: row.status,
-    note: row.message ?? "",
+    note: row.message && violatesContactPolicy(row.message) ? "历史说明已隐藏" : row.message ?? "",
     card: parsedCard.success ? parsedCard.data : { legacy: true as const },
     createdAt: row.createdAt.toISOString(),
     expiresAt: row.expiresAt.toISOString(),
@@ -324,11 +333,19 @@ export function createGreetingService(prisma: PrismaClient, now: () => Date = ()
     async send(actor: Actor, rawInput: SendGreetingInput) {
       const input = sendGreetingSchema.parse(rawInput);
       const at = now();
-      await loadSendContext(prisma, actor, input, at);
+      const preflight = await loadSendContext(prisma, actor, input, at);
       await recordAttempt(actor.id, at);
       const result = await prisma.$transaction(async (transaction) => {
+        await lockAccountPair(transaction, preflight.teacherId, preflight.parentId);
+        await advisoryLock(transaction, `greeting-context:${preflight.contextKey}`);
         const initialContext = await loadSendContext(transaction, actor, input, at);
-        await advisoryLock(transaction, `greeting-context:${initialContext.contextKey}`);
+        if (
+          initialContext.contextKey !== preflight.contextKey ||
+          initialContext.teacherId !== preflight.teacherId ||
+          initialContext.parentId !== preflight.parentId
+        ) {
+          throw new GreetingWorkflowError("CONFLICT", "公开联系场景已发生变化，请重试");
+        }
         const locked = await lockPublicContext(transaction, initialContext.teacher.id, initialContext.request.id, at);
         const context = await loadSendContext(transaction, actor, input, at);
         if (await hasBlock(transaction, context.teacherId, context.parentId)) {
@@ -371,10 +388,14 @@ export function createGreetingService(prisma: PrismaClient, now: () => Date = ()
     async respond(actor: Actor, greetingId: string, rawInput: GreetingActionInput) {
       assertActor(actor.role);
       const input = greetingActionSchema.parse(rawInput);
-      const preliminary = await prisma.greeting.findUnique({ where: { id: greetingId }, select: { contextKey: true } });
+      const preliminary = await prisma.greeting.findUnique({
+        where: { id: greetingId },
+        select: { contextKey: true, senderAccountId: true, recipientAccountId: true },
+      });
       if (!preliminary) throw new GreetingWorkflowError("NOT_FOUND", "打招呼记录不存在");
       const at = now();
       const result = await prisma.$transaction(async (transaction) => {
+        await lockAccountPair(transaction, preliminary.senderAccountId, preliminary.recipientAccountId);
         await advisoryLock(transaction, `greeting-context:${preliminary.contextKey}`);
         const greeting = await transaction.greeting.findUnique({ where: { id: greetingId } });
         if (!greeting) throw new GreetingWorkflowError("NOT_FOUND", "打招呼记录不存在");

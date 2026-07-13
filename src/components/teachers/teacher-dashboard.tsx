@@ -18,7 +18,7 @@ export function TeacherDashboard({
 }) {
   const completion = profile
     ? calculateProfileCompletion(profile)
-    : { percentage: 0, missingItems: ["公开昵称", "身份类型", "个人简介", "教学年限", "授课价格", "授课科目", "主授课地区"] };
+    : { percentage: 0, missingItems: ["公开昵称", "公开标题", "身份类型", "个人简介", "教学年限", "授课价格", "授课科目", "主授课地区"] };
   return (
     <main className="teacher-dashboard portal-page" id="main-content">
       <section className="teacher-dashboard__hero">

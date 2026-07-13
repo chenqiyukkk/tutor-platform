@@ -9,6 +9,7 @@ const profile: TeacherProfile = {
   id: "profile-secret",
   accountId: "account-secret",
   publicNickname: "林老师",
+  headline: "耐心启发式教学",
   identityType: "FULL_TIME_TEACHER",
   bio: "十年一线教学经验，重视学习方法与思维习惯。",
   yearsExperience: 10,

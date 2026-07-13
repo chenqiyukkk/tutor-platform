@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { contactPolicyMessage, violatesContactPolicy } from "@/features/safety/contact-policy";
 
 const namedIdSchema = z.object({
   id: z.string().uuid(),
@@ -21,7 +22,11 @@ const teacherCardSchema = z.object({
   verified: z.boolean(),
   subjects: z.array(namedIdSchema).min(1),
   serviceAreas: z.array(serviceAreaSchema).min(1),
-}).strict();
+}).strict().superRefine((value, context) => {
+  for (const [field, text] of [["publicNickname", value.publicNickname], ["headline", value.headline]] as const) {
+    if (violatesContactPolicy(text)) context.addIssue({ code: "custom", path: [field], message: contactPolicyMessage });
+  }
+});
 
 const requestCardSchema = z.object({
   id: z.string().uuid(),
@@ -34,7 +39,11 @@ const requestCardSchema = z.object({
   scheduleText: z.string().max(500).nullable(),
   region: namedIdSchema,
   subjects: z.array(namedIdSchema).min(1),
-}).strict();
+}).strict().superRefine((value, context) => {
+  for (const [field, text] of [["title", value.title], ["studentAlias", value.studentAlias], ["scheduleText", value.scheduleText]] as const) {
+    if (violatesContactPolicy(text)) context.addIssue({ code: "custom", path: [field], message: contactPolicyMessage });
+  }
+});
 
 export const currentGreetingCardSnapshotSchema = z.object({
   teacher: teacherCardSchema,

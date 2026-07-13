@@ -19,6 +19,7 @@ const profile: TeacherProfile = {
   id: "99999999-9999-4999-8999-999999999999",
   accountId: account.id,
   publicNickname: "林老师",
+  headline: "帮学生建立数学思维",
   identityType: "FULL_TIME_TEACHER",
   bio: "十年一线教学经验，擅长帮助学生建立清晰的知识体系。",
   yearsExperience: 10,

@@ -19,6 +19,7 @@ function completeProfile(overrides: Partial<TeacherProfile> = {}): TeacherProfil
     id: "99999999-9999-4999-8999-999999999999",
     accountId: teacher.id,
     publicNickname: "林老师",
+    headline: "帮学生建立数学思维",
     identityType: "FULL_TIME_TEACHER",
     bio: "十年一线教学经验，擅长帮助学生建立清晰的知识体系。",
     yearsExperience: 10,
@@ -60,6 +61,7 @@ describe("teacher profile service", () => {
 
     await service.saveDraft(teacher, {
       publicNickname: "  林老师  ",
+      headline: "  专注初高中数学  ",
       identityType: "UNIVERSITY_STUDENT",
       bio: "  擅长启发式教学  ",
       yearsExperience: 2,
@@ -73,6 +75,7 @@ describe("teacher profile service", () => {
 
     expect(repo.saveOwned).toHaveBeenCalledWith(teacher.id, expect.objectContaining({
       publicNickname: "林老师",
+      headline: "专注初高中数学",
       bio: "擅长启发式教学",
       subjectIds: [subjectId],
       extraRegionIds: [extraRegionId],
@@ -95,7 +98,8 @@ describe("teacher profile service", () => {
   it("requires complete fields, a subject and a primary district before publish", async () => {
     const service = createTeacherProfileService(repository({
       findOwned: vi.fn().mockResolvedValue(completeProfile({
-        publicNickname: "",
+      publicNickname: "",
+        headline: "",
         subjects: [],
         primaryRegion: null,
       })),
@@ -105,9 +109,25 @@ describe("teacher profile service", () => {
       code: "INCOMPLETE_PROFILE",
       fieldErrors: expect.objectContaining({
         publicNickname: expect.any(Array),
+        headline: expect.any(Array),
         subjectIds: expect.any(Array),
         primaryRegionId: expect.any(Array),
       }),
+    });
+  });
+
+  it.each([
+    ["headline", "WhatsApp: tutor_88"],
+    ["bio", "十年教学经验，可以在 Telegram @tutor88 联系我。"],
+    ["publicNickname", "TG: tutor88"],
+  ] as const)("rejects contact details in publishable teacher %s", async (field, value) => {
+    const service = createTeacherProfileService(repository({
+      findOwned: vi.fn().mockResolvedValue(completeProfile({ [field]: value })),
+    }));
+
+    await expect(service.publish(teacher)).rejects.toMatchObject({
+      code: "INCOMPLETE_PROFILE",
+      fieldErrors: expect.objectContaining({ [field]: expect.any(Array) }),
     });
   });
 
@@ -131,6 +151,7 @@ describe("profile completion", () => {
   it("is a pure calculation with stable missing labels", () => {
     const result = calculateProfileCompletion(completeProfile({
       bio: null,
+      headline: "",
       yearsExperience: null,
       rateMinCents: null,
       rateMaxCents: null,
@@ -138,8 +159,8 @@ describe("profile completion", () => {
     }));
 
     expect(result).toEqual({
-      percentage: 43,
-      missingItems: ["个人简介", "教学年限", "授课价格", "授课科目"],
+      percentage: 38,
+      missingItems: ["公开标题", "个人简介", "教学年限", "授课价格", "授课科目"],
     });
   });
 });

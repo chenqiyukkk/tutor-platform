@@ -54,7 +54,7 @@ function SnapshotDetails({ snapshot }: { snapshot: CurrentGreetingCardSnapshot }
   </div>;
 }
 
-export function GreetingCard({ item, onAction }: { item: GreetingItem; onAction(action: "accept" | "reject" | "report" | "block"): Promise<void> }) {
+export function GreetingCard({ item, onAction, busy = false }: { item: GreetingItem; onAction(action: "accept" | "reject" | "report" | "block"): Promise<void>; busy?: boolean }) {
   const parsed = greetingCardSnapshotSchema.safeParse(item.card);
   const current = parsed.success && !("legacy" in parsed.data) ? parsed.data : null;
   const title = current?.request.title ?? (parsed.success ? "历史联系卡片" : "资料快照暂不可读");
@@ -64,7 +64,7 @@ export function GreetingCard({ item, onAction }: { item: GreetingItem; onAction(
     {current ? <SnapshotDetails snapshot={current} /> : null}
     {item.note ? <blockquote>{item.note}</blockquote> : <p className="greeting-card__quiet">对方没有填写补充说明</p>}
     <footer><time dateTime={item.createdAt}>{new Date(item.createdAt).toLocaleDateString("zh-CN")}</time>
-      {item.direction === "received" && item.status === "PENDING" ? <div className="greeting-card__actions"><button className="button button--primary button--small" onClick={() => onAction("accept")} type="button">接受</button><button className="button button--outline button--small" onClick={() => onAction("reject")} type="button">婉拒</button><button className="text-button" onClick={() => onAction("report")} type="button">举报</button><button className="text-button" onClick={() => onAction("block")} type="button">屏蔽</button></div> : null}
+      {item.direction === "received" && item.status === "PENDING" ? <div className="greeting-card__actions"><button className="button button--primary button--small" disabled={busy} onClick={() => onAction("accept")} type="button">接受</button><button className="button button--outline button--small" disabled={busy} onClick={() => onAction("reject")} type="button">婉拒</button><button className="text-button" disabled={busy} onClick={() => onAction("report")} type="button">举报</button><button className="text-button" disabled={busy} onClick={() => onAction("block")} type="button">屏蔽</button></div> : null}
     </footer>
     {item.status === "ACCEPTED" ? <p className="conversation-notice">会话已建立，消息功能下一阶段开放。</p> : null}
   </article>;

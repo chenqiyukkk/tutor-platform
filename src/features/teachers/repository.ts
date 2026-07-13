@@ -33,6 +33,7 @@ function toProfile(row: ProfileRow): TeacherProfile {
     id: row.id,
     accountId: row.accountId,
     publicNickname: row.displayName,
+    headline: row.headline,
     identityType: row.identityType,
     bio: row.bio,
     yearsExperience: row.yearsExperience,
@@ -110,6 +111,7 @@ export class PrismaTeacherProfileRepository implements TeacherProfileRepository 
         create: {
           accountId,
           displayName: input.publicNickname,
+          headline: input.headline,
           identityType: input.identityType,
           bio: input.bio,
           yearsExperience: input.yearsExperience,
@@ -119,6 +121,7 @@ export class PrismaTeacherProfileRepository implements TeacherProfileRepository 
         },
         update: {
           displayName: input.publicNickname,
+          headline: input.headline,
           identityType: input.identityType,
           bio: input.bio,
           yearsExperience: input.yearsExperience,

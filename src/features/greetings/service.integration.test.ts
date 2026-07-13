@@ -318,12 +318,80 @@ describe("greeting workflow against PostgreSQL", () => {
     await expect(service.send({ id: extraParent.id, role: "parent" }, { targetId: teacherProfileId, requestId: req.id, note: "" })).rejects.toMatchObject({ code: "BLOCKED" });
   });
 
+  it("serializes block before a send for another request owned by the same account pair", async () => {
+    const scenario = await isolatedScenario("跨需求锁");
+    const secondRequest = await prisma.tutoringRequest.create({ data: {
+      parentProfileId: scenario.parentProfile.id,
+      studentProfileId: scenario.student.id,
+      regionId: scenario.region.id,
+      title: "跨需求锁第二条需求",
+      description: "验证屏蔽与发送串行",
+      budgetMin: 8_000,
+      budgetMax: 12_000,
+      teachingMode: "BOTH",
+      status: "PUBLISHED",
+      publishedAt: new Date("2026-07-01T00:00:00.000Z"),
+      expiresAt: new Date("2027-01-01T00:00:00.000Z"),
+    } });
+    await prisma.requestSubject.create({ data: { tutoringRequestId: secondRequest.id, subjectId: scenario.subject.id } });
+
+    const functionName = `test_block_sleep_${marker}`;
+    const triggerName = `test_block_sleep_trigger_${marker}`;
+    await prisma.$executeRawUnsafe(`
+      CREATE FUNCTION "${functionName}"() RETURNS trigger LANGUAGE plpgsql AS $$
+      BEGIN
+        PERFORM pg_sleep(1);
+        RETURN NEW;
+      END $$;
+      CREATE TRIGGER "${triggerName}"
+      BEFORE INSERT ON "Block"
+      FOR EACH ROW EXECUTE FUNCTION "${functionName}"();
+    `);
+    try {
+      const blocking = scenario.service.respond(
+        { id: scenario.parent.id, role: "parent" },
+        scenario.greeting.id,
+        { action: "block", reason: "跨需求并发测试" },
+      );
+      await new Promise((resolve) => setTimeout(resolve, 200));
+      const sending = scenario.service.send(
+        { id: scenario.teacher.id, role: "teacher" },
+        { targetId: secondRequest.id, requestId: secondRequest.id, note: "" },
+      );
+
+      await expect(blocking).resolves.toMatchObject({ status: "BLOCKED" });
+      await expect(sending).rejects.toMatchObject({ code: "BLOCKED" });
+      await expect(prisma.greeting.count({ where: { tutoringRequestId: secondRequest.id } })).resolves.toBe(0);
+    } finally {
+      await prisma.$executeRawUnsafe(`DROP TRIGGER IF EXISTS "${triggerName}" ON "Block"`);
+      await prisma.$executeRawUnsafe(`DROP FUNCTION IF EXISTS "${functionName}"()`);
+    }
+  });
+
   it("expires pending rows while listing and never returns private account fields", async () => {
     const service = createGreetingService(prisma);
     const page = await service.listInbox({ id: parentId, role: "parent" }, { box: "sent", pageSize: 20 });
     expect(page.items.length).toBeGreaterThan(0);
     expect(page).toMatchObject({ pageSize: 20 });
     expect(JSON.stringify(page)).not.toMatch(/username|email|password|notes|evidence/i);
+  });
+
+  it("隐藏旧数据中不符合联系方式策略的补充说明", async () => {
+    const greeting = await prisma.greeting.create({ data: {
+      senderAccountId: parentId,
+      recipientAccountId: teacherId,
+      tutoringRequestId: requestId,
+      contextKey: `legacy-policy:${crypto.randomUUID()}`,
+      message: "WhatsApp: tutor_88",
+      cardSnapshot: { legacy: true },
+      expiresAt: new Date("2027-01-01T00:00:00.000Z"),
+    } });
+
+    const page = await createGreetingService(prisma).listInbox(
+      { id: parentId, role: "parent" },
+      { box: "sent", pageSize: 20 },
+    );
+    expect(page.items.find(({ id }) => id === greeting.id)?.note).toBe("历史说明已隐藏");
   });
 
   it("walks more than 50 inbox rows with stable keyset cursors while newer rows arrive", async () => {

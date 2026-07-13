@@ -28,6 +28,7 @@ export function ProfileCard({ profile }: { profile: TeacherProfileDto }) {
         </div>
         {profile.online ? <span className="profile-status profile-status--online">支持线上</span> : null}
       </div>
+      <p className="teacher-profile-card__headline">{profile.headline || "这位老师还没有填写公开标题。"}</p>
       <p className="teacher-profile-card__bio">{profile.bio || "这位老师还没有填写个人简介。"}</p>
       <dl className="teacher-profile-card__facts">
         <div><dt>教学经验</dt><dd>{profile.yearsExperience === null ? "待完善" : `${profile.yearsExperience} 年`}</dd></div>

@@ -168,6 +168,22 @@ describe("parent request service", () => {
     expect(state.current.status).toBe("DRAFT");
   });
 
+  it.each([
+    ["scheduleText", "Telegram @tutor88"],
+    ["publicLocationNote", "座机 020-12345678"],
+    ["description", "Whats App: tutor_88"],
+  ] as const)("rejects contact details in publishable request %s", async (field, value) => {
+    const unsafe = request();
+    unsafe[field] = value;
+    const state = setup(unsafe);
+
+    await expect(state.service.publish(parentA, ids.request)).rejects.toMatchObject({
+      code: "INCOMPLETE_REQUEST",
+      fieldErrors: expect.objectContaining({ [field]: expect.any(Array) }),
+    });
+    expect(state.current.status).toBe("DRAFT");
+  });
+
   it("publishes a complete request, editing returns it to draft, and close is irreversible", async () => {
     const state = setup();
     await expect(state.service.publish(parentA, ids.request)).resolves.toMatchObject({ status: "PUBLISHED" });

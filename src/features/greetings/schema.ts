@@ -1,27 +1,12 @@
 import { z } from "zod";
-
-const contactPatterns = [
-  /(?:微\s*信|微\s*xin|wei\s*xin|we\s*chat|wechat|weixin|v\s*信)/iu,
-  /(?:^|[^A-Za-z0-9])(?:w\s*x|v\s*x)(?=\s*(?:号|id|[:：])|\s+[\p{L}\p{N}_-]{2,}|$)/iu,
-  /(?:^|[^a-z])q\s*q(?:[^a-z]|$)/iu,
-  /扣\s*扣/iu,
-  /二\s*维\s*码|扫码/iu,
-  /[\p{L}\p{N}._%+-]+@[\p{L}\p{N}.-]+\.[\p{L}]{2,}/iu,
-  /(?:https?:\/\/|www\.)\S+/iu,
-  /\b(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z]{2,63}\b/iu,
-  /(?:加\s*好友|付\s*(?:信息|中介)\s*费|外部\s*付费|转账)/iu,
-  /(?:联系\s*方式|手机号|手机号码|电话号|邮箱|私聊发)/iu,
-];
+import { contactPolicyMessage, violatesContactPolicy } from "@/features/safety/contact-policy";
 
 export const greetingNoteSchema = z.string().transform((value) => value.trim()).superRefine((value, context) => {
-  const normalized = value.normalize("NFKC").replace(/\p{Cf}/gu, "");
-  const compactPhoneCandidate = normalized.replace(/[\s./()\-_,，、•·:：]/gu, "");
-  const hasPhoneNumber = /(?:^|[^\d])(?:\+?86)?1[3-9]\d{9}(?:$|[^\d])/u.test(compactPhoneCandidate);
   if (Array.from(value).length > 100) {
     context.addIssue({ code: "custom", message: "补充说明最多 100 个字符" });
   }
-  if (hasPhoneNumber || contactPatterns.some((pattern) => pattern.test(normalized))) {
-    context.addIssue({ code: "custom", message: "请勿填写联系方式、外部链接或付费引导" });
+  if (violatesContactPolicy(value)) {
+    context.addIssue({ code: "custom", message: contactPolicyMessage });
   }
 });
 

@@ -15,6 +15,7 @@ type FieldErrors = Record<string, string[]>;
 
 type EditableProfile = {
   publicNickname: string;
+  headline: string;
   identityType: TeacherIdentityType | null;
   bio: string;
   yearsExperience: number | null;
@@ -29,6 +30,7 @@ type EditableProfile = {
 function initialValues(profile: TeacherProfileDto | null): EditableProfile {
   return {
     publicNickname: profile?.publicNickname ?? "",
+    headline: profile?.headline ?? "",
     identityType: profile?.identityType ?? null,
     bio: profile?.bio ?? "",
     yearsExperience: profile?.yearsExperience ?? null,
@@ -85,6 +87,7 @@ export function ProfileForm({
 
   const previewProfile: TeacherProfileDto = {
     publicNickname: values.publicNickname,
+    headline: values.headline || null,
     identityType: values.identityType,
     bio: values.bio || null,
     yearsExperience: values.yearsExperience,
@@ -229,6 +232,9 @@ export function ProfileForm({
               {errorFor("identityType")}
             </div>
           </div>
+          <FormField error={fieldErrors.headline?.[0]} htmlFor="headline" label="公开标题">
+            <input id="headline" maxLength={160} value={values.headline} onChange={(event) => updateValues({ ...values, headline: event.target.value })} />
+          </FormField>
           <div className="form-field">
             <label htmlFor="bio">个人简介与教学经历</label>
             <textarea id="bio" maxLength={2000} rows={6} value={values.bio} onChange={(event) => updateValues({ ...values, bio: event.target.value })} />

@@ -6,6 +6,7 @@ import {
   greetingInboxQuerySchema,
   greetingNoteSchema,
 } from "./schema";
+import { currentGreetingCardSnapshotSchema } from "./card-schema";
 
 describe("greeting note schema", () => {
   it("accepts an empty trimmed note and exactly 100 Unicode code points", () => {
@@ -56,6 +57,14 @@ describe("greeting note schema", () => {
     "主页 example.com",
     "加好友后付信息费",
     "联系方式私聊发你",
+    "WhatsApp: tutor_88",
+    "whats app 找我",
+    "W​hats​App tutor_88",
+    "Telegram @tutor88",
+    "tele gram 联系我",
+    "TG: tutor_88",
+    "座机 020 12345678",
+    "电话 ０２０－１２３４５６７８",
   ])("rejects contact or off-platform language: %s", (note) => {
     expect(() => greetingNoteSchema.parse(note)).toThrow();
   });
@@ -70,6 +79,47 @@ describe("greeting note schema", () => {
     "熟悉 AVX 指令优化，但会按学生水平讲解。",
   ])("does not reject legitimate tutoring notes: %s", (note) => {
     expect(greetingNoteSchema.parse(note)).toBe(note);
+  });
+});
+
+describe("greeting card contact policy", () => {
+  const card = {
+    teacher: {
+      id: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+      publicNickname: "林老师",
+      identityType: "FULL_TIME_TEACHER" as const,
+      headline: "把数学讲清楚",
+      yearsExperience: 5,
+      rateMinCents: 10_000,
+      rateMaxCents: 15_000,
+      online: true,
+      verified: true,
+      subjects: [{ id: "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb", name: "数学" }],
+      serviceAreas: [{ id: "cccccccc-cccc-4ccc-8ccc-cccccccccccc", name: "天河区", isPrimary: true }],
+    },
+    request: {
+      id: "dddddddd-dddd-4ddd-8ddd-dddddddddddd",
+      title: "初二数学巩固",
+      studentAlias: "小树",
+      gradeLevel: "GRADE_8",
+      budgetMinCents: 8_000,
+      budgetMaxCents: 12_000,
+      teachingMode: "BOTH" as const,
+      scheduleText: "周末下午",
+      region: { id: "cccccccc-cccc-4ccc-8ccc-cccccccccccc", name: "天河区" },
+      subjects: [{ id: "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb", name: "数学" }],
+    },
+  };
+
+  it.each([
+    ["teacher", { headline: "WhatsApp: tutor_88" }],
+    ["request", { scheduleText: "Telegram @tutor88" }],
+    ["request", { studentAlias: "TG: pupil88" }],
+  ] as const)("rejects contact details in %s user text", (side, override) => {
+    expect(() => currentGreetingCardSnapshotSchema.parse({
+      ...card,
+      [side]: { ...card[side], ...override },
+    })).toThrow();
   });
 });
 
