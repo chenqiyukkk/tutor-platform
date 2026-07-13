@@ -589,6 +589,14 @@ describe("greeting workflow against PostgreSQL", () => {
     await service.respond({ id: reportParent.id, role: "parent" }, greeting.id, { action: "report", reason: "疑似不当信息" });
     await expect(service.respond({ id: reportParent.id, role: "parent" }, greeting.id, { action: "report", reason: "重复提交" })).resolves.toMatchObject({ status: "REPORTED", reported: true });
     await expect(prisma.report.count({ where: { greetingId: greeting.id } })).resolves.toBe(1);
+    const report = await prisma.report.findUniqueOrThrow({ where: { greetingId: greeting.id } });
+    expect(report).toMatchObject({
+      targetType: "GREETING",
+      targetId: greeting.id,
+      targetSnapshot: { card: greeting.card, note: greeting.note },
+    });
+    expect(JSON.stringify(report.targetSnapshot)).not.toContain(reportParent.id);
+    expect(JSON.stringify(report.targetSnapshot)).not.toContain(teacherId);
 
     const invalidParent = await account("PARENT", "g-invalid-parent");
     const invalidPp = await prisma.parentProfile.create({ data: { accountId: invalidParent.id, displayName: "失效家长" } });

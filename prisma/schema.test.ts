@@ -22,6 +22,9 @@ const migrationSql = readFileSync(
 const passwordResetMigration = readdirSync(migrationsDirectory, { withFileTypes: true }).find(
   (entry) => entry.isDirectory() && entry.name.endsWith("_password_reset_activation"),
 );
+const moderationMigration = readdirSync(migrationsDirectory, { withFileTypes: true }).find(
+  (entry) => entry.isDirectory() && entry.name === "20260714090000_moderation_workflow",
+);
 
 describe("database integrity schema", () => {
   it("supports account-owned favorites with exactly one target", () => {
@@ -268,5 +271,56 @@ describe("chat polling indexes", () => {
     expect(sql).not.toContain('SET "changeVersion" = 0');
     expect(sql).toContain('CREATE INDEX "Message_conversationId_changeVersion_idx"');
     expect(sql).toContain('DROP INDEX "Message_conversationId_updatedAt_id_idx"');
+  });
+});
+
+describe("moderation workflow schema", () => {
+  it("stores canonical report targets, idempotency keys, decisions, and moderation holds", () => {
+    expect(schema).toContain("enum ReportTargetType");
+    for (const value of ["ACCOUNT", "TEACHER_PROFILE", "TUTORING_REQUEST", "GREETING", "CONVERSATION", "MESSAGE"]) {
+      expect(schema).toMatch(new RegExp(`enum ReportTargetType[\\s\\S]*\\b${value}\\b`));
+    }
+    expect(schema).toMatch(/enum ReportResolutionAction[\s\S]*\bNONE\b[\s\S]*\bCONTENT_TAKEDOWN\b[\s\S]*\bACCOUNT_SUSPENSION\b/);
+    expect(schema).toMatch(/targetType\s+ReportTargetType\b/);
+    expect(schema).toMatch(/targetId\s+String\s+@db\.Uuid/);
+    expect(schema).toMatch(/clientRequestId\s+String\?\s+@db\.Uuid/);
+    expect(schema).toMatch(/targetSnapshot\s+Json\?/);
+    expect(schema).toMatch(/resolutionAction\s+ReportResolutionAction\?/);
+    expect(schema).toMatch(/teacherProfileId\s+String\?\s+@db\.Uuid/);
+    expect(schema).toContain("@@unique([reporterAccountId, clientRequestId])");
+    expect(schema).toContain("@@index([targetType, targetId])");
+    expect(schema).toContain("@@unique([accountId, clientRequestId])");
+    expect(schema).toMatch(/requestId\s+String\?\s+@unique\s+@db\.Uuid/);
+    expect(schema.match(/moderationRejectedAt\s+DateTime\?\s+@db\.Timestamptz\(3\)/g)).toHaveLength(2);
+    expect(schema.match(/moderationReason\s+String\?/g)).toHaveLength(2);
+  });
+
+  it("adds forward-only database checks, partial uniqueness, and append-only audit enforcement", () => {
+    expect(moderationMigration).toBeDefined();
+    if (!moderationMigration) return;
+    const sql = readFileSync(join(migrationsDirectory, moderationMigration.name, "migration.sql"), "utf8");
+    expect(sql.trimStart().startsWith("BEGIN;")).toBe(true);
+    expect(sql.trimEnd().endsWith("COMMIT;")).toBe(true);
+    expect(sql).toContain('LOCK TABLE "Report" IN SHARE ROW EXCLUSIVE MODE');
+    const preflight = sql.indexOf("moderation_report_target_preflight");
+    const firstPersistentDdl = Math.min(
+      ...[sql.indexOf('CREATE TYPE "ReportTargetType"'), sql.indexOf('ALTER TABLE "Report"')]
+        .filter((position) => position >= 0),
+    );
+    expect(preflight).toBeGreaterThanOrEqual(0);
+    expect(preflight).toBeLessThan(firstPersistentDdl);
+    expect(sql).toContain("cannot derive canonical target for one or more legacy reports");
+    expect(sql).toContain('ALTER COLUMN "targetType" SET NOT NULL');
+    expect(sql).toContain('ALTER COLUMN "targetId" SET NOT NULL');
+    expect(sql).toContain('"Report_reporterAccountId_clientRequestId_key"');
+    expect(sql).toContain('"Report_reporterAccountId_targetType_targetId_open_key"');
+    expect(sql).toMatch(/WHERE "status" IN \('PENDING', 'REVIEWING'\)/);
+    expect(sql).toContain('"Verification_accountId_clientRequestId_key"');
+    expect(sql).toContain('"Verification_accountId_type_pending_key"');
+    expect(sql).toMatch(/WHERE "status" = 'PENDING'/);
+    expect(sql).toContain('CONSTRAINT "Report_no_self_report_check"');
+    expect(sql).toContain('CONSTRAINT "Report_target_shape_check"');
+    expect(sql).toContain('CREATE TRIGGER "AdminAuditLog_append_only"');
+    expect(sql).toContain("ERRCODE = '55000'");
   });
 });

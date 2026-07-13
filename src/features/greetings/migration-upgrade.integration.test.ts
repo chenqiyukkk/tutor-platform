@@ -33,6 +33,7 @@ const MIGRATIONS = [
   "20260713133600_chat_polling_indexes",
   "20260713133700_chat_message_change_polling",
   "20260713133800_chat_message_change_version",
+  "20260714090000_moderation_workflow",
 ] as const;
 const WORKFLOW_MIGRATION = "20260713133000_greeting_workflow";
 const PUBLIC_SAFETY_MIGRATION = "20260713133400_public_content_safety";
@@ -191,7 +192,7 @@ describe("greeting workflow migration upgrades", () => {
     expect(isSafeMigrationWorkspace(join(tmpdir(), "another-project", "run-example"))).toBe(false);
   });
 
-  it("deploys all 17 migrations into an empty database including commit-ordered message versions", async () => {
+  it("deploys all 18 migrations into an empty database including commit-ordered message versions", async () => {
     const database = await createDatabase();
     const root = createMigrationWorkspace(MIGRATIONS.length);
     const client = new Client({ connectionString: database.url });
@@ -199,7 +200,7 @@ describe("greeting workflow migration upgrades", () => {
       expectPrismaSuccess(runPrisma(root, database.url, ["migrate", "deploy"]));
       await client.connect();
       const applied = await client.query(`SELECT count(*)::int AS count FROM "_prisma_migrations" WHERE finished_at IS NOT NULL AND rolled_back_at IS NULL`);
-      expect(applied.rows[0].count).toBe(17);
+      expect(applied.rows[0].count).toBe(18);
       const chatIndexes = await client.query<{ indexname: string; indexdef: string }>(`
         SELECT indexname, indexdef
         FROM pg_indexes

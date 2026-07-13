@@ -60,6 +60,21 @@ enum ReportStatus {
   DISMISSED
 }
 
+enum ReportTargetType {
+  ACCOUNT
+  TEACHER_PROFILE
+  TUTORING_REQUEST
+  GREETING
+  CONVERSATION
+  MESSAGE
+}
+
+enum ReportResolutionAction {
+  NONE
+  CONTENT_TAKEDOWN
+  ACCOUNT_SUSPENSION
+}
+
 enum VerificationStatus {
   PENDING
   APPROVED
@@ -149,6 +164,8 @@ model TeacherProfile {
   status                     ProfileStatus        @default(DRAFT)
   publishedAt                DateTime?            @db.Timestamptz(3)
   publicContentSafetyVersion Int                  @default(0)
+  moderationRejectedAt       DateTime?            @db.Timestamptz(3)
+  moderationReason           String?
   createdAt                  DateTime             @default(now()) @db.Timestamptz(3)
   updatedAt                  DateTime             @updatedAt @db.Timestamptz(3)
 
@@ -157,6 +174,7 @@ model TeacherProfile {
   serviceAreas  TeacherServiceArea[]
   favorites     Favorite[]
   verifications Verification[]
+  reports       Report[]
 
   @@index([status])
   @@index([status, publishedAt(sort: Desc), id])
@@ -291,6 +309,8 @@ model TutoringRequest {
   closedAt                   DateTime?     @db.Timestamptz(3)
   expiresAt                  DateTime?     @db.Timestamptz(3)
   publicContentSafetyVersion Int           @default(0)
+  moderationRejectedAt       DateTime?     @db.Timestamptz(3)
+  moderationReason           String?
   createdAt                  DateTime      @default(now()) @db.Timestamptz(3)
   updatedAt                  DateTime      @updatedAt @db.Timestamptz(3)
 
@@ -435,33 +455,41 @@ model Block {
 }
 
 model Report {
-  id                String       @id @default(uuid()) @db.Uuid
-  reporterAccountId String       @db.Uuid
-  reportedAccountId String?      @db.Uuid
-  reviewerAccountId String?      @db.Uuid
-  tutoringRequestId String?      @db.Uuid
-  conversationId    String?      @db.Uuid
-  messageId         String?      @db.Uuid
-  greetingId        String?      @unique @db.Uuid
+  id                String                  @id @default(uuid()) @db.Uuid
+  reporterAccountId String                  @db.Uuid
+  reportedAccountId String?                 @db.Uuid
+  reviewerAccountId String?                 @db.Uuid
+  teacherProfileId  String?                 @db.Uuid
+  tutoringRequestId String?                 @db.Uuid
+  conversationId    String?                 @db.Uuid
+  messageId         String?                 @db.Uuid
+  greetingId        String?                 @unique @db.Uuid
+  targetType        ReportTargetType
+  targetId          String                  @db.Uuid
+  clientRequestId   String?                 @db.Uuid
+  targetSnapshot    Json?
   reason            String
   details           String?
-  status            ReportStatus @default(PENDING)
+  status            ReportStatus            @default(PENDING)
   resolution        String?
-  reviewedAt        DateTime?    @db.Timestamptz(3)
-  createdAt         DateTime     @default(now()) @db.Timestamptz(3)
-  updatedAt         DateTime     @updatedAt @db.Timestamptz(3)
+  resolutionAction  ReportResolutionAction?
+  reviewedAt        DateTime?               @db.Timestamptz(3)
+  createdAt         DateTime                @default(now()) @db.Timestamptz(3)
+  updatedAt         DateTime                @updatedAt @db.Timestamptz(3)
 
   reporter        Account          @relation("ReportReporter", fields: [reporterAccountId], references: [id], onDelete: Restrict)
   reportedAccount Account?         @relation("ReportSubject", fields: [reportedAccountId], references: [id], onDelete: SetNull)
   reviewer        Account?         @relation("ReportReviewer", fields: [reviewerAccountId], references: [id], onDelete: SetNull)
+  teacherProfile  TeacherProfile?  @relation(fields: [teacherProfileId], references: [id], onDelete: SetNull)
   tutoringRequest TutoringRequest? @relation(fields: [tutoringRequestId], references: [id], onDelete: SetNull)
   conversation    Conversation?    @relation(fields: [conversationId], references: [id], onDelete: SetNull)
   message         Message?         @relation(fields: [messageId], references: [id], onDelete: SetNull)
   greeting        Greeting?        @relation(fields: [greetingId], references: [id], onDelete: SetNull)
 
+  @@unique([reporterAccountId, clientRequestId])
   @@index([status, createdAt])
-  @@index([reporterAccountId])
   @@index([reportedAccountId])
+  @@index([targetType, targetId])
 }
 
 model Verification {
@@ -469,6 +497,7 @@ model Verification {
   accountId         String             @db.Uuid
   teacherProfileId  String?            @db.Uuid
   reviewerAccountId String?            @db.Uuid
+  clientRequestId   String?            @db.Uuid
   type              String
   status            VerificationStatus @default(PENDING)
   evidence          Json?
@@ -482,6 +511,7 @@ model Verification {
   teacherProfile TeacherProfile? @relation(fields: [teacherProfileId], references: [id], onDelete: Cascade)
   reviewer       Account?        @relation("VerificationReviewer", fields: [reviewerAccountId], references: [id], onDelete: SetNull)
 
+  @@unique([accountId, clientRequestId])
   @@index([accountId, type, status])
   @@index([status, submittedAt])
 }
@@ -489,6 +519,7 @@ model Verification {
 model AdminAuditLog {
   id             String   @id @default(uuid()) @db.Uuid
   adminAccountId String   @db.Uuid
+  requestId      String?  @unique @db.Uuid
   action         String
   targetType     String
   targetId       String?
