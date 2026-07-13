@@ -4,6 +4,7 @@ import { ZodError } from "zod";
 import { AuthError, type AuthenticatedAccount } from "@/features/auth/service";
 import { sessionCookieNames } from "@/features/auth/session";
 import { readUniqueCookieValue } from "@/features/directory/detail-auth";
+import { JsonBodyError, readLimitedJson } from "@/lib/json-body";
 
 import { favoriteListQuerySchema } from "./schema";
 import { FavoriteWorkflowError, favoriteTargetSchema } from "./service";
@@ -30,19 +31,15 @@ function realmFrom(params: URLSearchParams): Realm {
   return realm;
 }
 
-async function readJson(request: Request) {
-  const contentType = request.headers.get("content-type")?.split(";", 1)[0]?.trim().toLowerCase();
-  if (contentType !== "application/json") throw new RouteInputError("请提交 JSON 内容");
-  try {
-    return await request.json();
-  } catch {
-    throw new RouteInputError("JSON 内容格式不正确");
-  }
-}
-
 function errorResponse(error: unknown) {
   if (error instanceof AuthError || (error instanceof FavoriteWorkflowError && error.code === "UNAUTHORIZED")) {
     return NextResponse.json({ code: "UNAUTHORIZED", error: "请先登录" }, { status: 401 });
+  }
+  if (error instanceof JsonBodyError) {
+    return NextResponse.json(
+      { code: error.code === "too_large" ? "PAYLOAD_TOO_LARGE" : "INVALID_INPUT", error: error.message },
+      { status: error.code === "too_large" ? 413 : 400 },
+    );
   }
   if (error instanceof ZodError || error instanceof RouteInputError) {
     return NextResponse.json({ code: "INVALID_INPUT", error: "请求内容无效" }, { status: 400 });
@@ -101,7 +98,7 @@ export function createFavoriteHandlers({ authenticate, favoriteService }: Depend
     async POST(request: Request) {
       try {
         const { account } = await caller(request, ["realm"]);
-        const target = favoriteTargetSchema.parse(await readJson(request));
+        const target = favoriteTargetSchema.parse(await readLimitedJson(request));
         return NextResponse.json({ favorite: await favoriteService.add(account, target) }, { status: 201 });
       } catch (error) {
         return errorResponse(error);
@@ -111,7 +108,7 @@ export function createFavoriteHandlers({ authenticate, favoriteService }: Depend
     async DELETE(request: Request) {
       try {
         const { account } = await caller(request, ["realm"]);
-        const target = favoriteTargetSchema.parse(await readJson(request));
+        const target = favoriteTargetSchema.parse(await readLimitedJson(request));
         await favoriteService.remove(account, target);
         return new NextResponse(null, { status: 204 });
       } catch (error) {

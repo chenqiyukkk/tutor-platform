@@ -101,4 +101,25 @@ describe("favorite routes", () => {
       { targetType: "teacher", targetId },
     );
   });
+
+  it("rejects an oversized streaming mutation with 413 before schema parsing", async () => {
+    const { favoriteService, handlers } = setup();
+    const body = new ReadableStream<Uint8Array>({
+      start(controller) {
+        controller.enqueue(new TextEncoder().encode(`{"targetType":"teacher","targetId":"${"x".repeat(17_000)}`));
+      },
+    });
+    const response = await handlers.POST(new Request(
+      "http://test/api/favorites?realm=parent",
+      {
+        method: "POST",
+        headers: { "content-type": "application/json", cookie: "tutor_parent_session=token" },
+        body,
+        duplex: "half",
+      } as RequestInit & { duplex: "half" },
+    ));
+
+    expect(response.status).toBe(413);
+    expect(favoriteService.add).not.toHaveBeenCalled();
+  });
 });

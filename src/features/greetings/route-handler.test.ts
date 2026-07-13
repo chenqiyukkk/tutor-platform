@@ -70,9 +70,24 @@ describe("interaction routes", () => {
     } as RequestInit & { duplex: "half" });
 
     const response = await handlers.greetings.POST(request);
-    expect(response.status).toBe(400);
+    expect(response.status).toBe(413);
     expect(greetingService.send).not.toHaveBeenCalled();
   }, 1_000);
+
+  it("does not disguise an unexpected stream failure as invalid JSON", async () => {
+    const { handlers } = setup();
+    const body = new ReadableStream<Uint8Array>({
+      start(controller) { controller.error(new Error("stream exploded")); },
+    });
+    const request = new Request("http://test/api/greetings?realm=parent", {
+      method: "POST",
+      headers: { "content-type": "application/json", cookie: "tutor_parent_session=token" },
+      body,
+      duplex: "half",
+    } as RequestInit & { duplex: "half" });
+
+    await expect(handlers.greetings.POST(request)).rejects.toThrow("stream exploded");
+  });
 
   it("loads only a strict target-specific favorite state", async () => {
     const { handlers, favoriteService } = setup();

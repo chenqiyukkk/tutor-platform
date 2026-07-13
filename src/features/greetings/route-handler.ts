@@ -5,7 +5,7 @@ import { AuthError, type AuthenticatedAccount } from "@/features/auth/service";
 import { sessionCookieNames } from "@/features/auth/session";
 import { readUniqueCookieValue } from "@/features/directory/detail-auth";
 import { FavoriteWorkflowError, favoriteTargetSchema } from "@/features/favorites/service";
-import { readLimitedJson } from "@/lib/json-body";
+import { JsonBodyError, readLimitedJson } from "@/lib/json-body";
 
 import { greetingActionSchema, greetingInboxQuerySchema, sendGreetingSchema, type GreetingActionInput, type SendGreetingInput } from "./schema";
 import { GreetingWorkflowError } from "./service";
@@ -28,13 +28,15 @@ function realmFrom(params: URLSearchParams): Realm {
   return realm;
 }
 
-async function readJson(request: Request) {
-  try { return await readLimitedJson(request); } catch { throw new RouteInputError("JSON 内容格式不正确"); }
-}
-
 function errorResponse(error: unknown) {
   if (error instanceof AuthError || (error instanceof GreetingWorkflowError && error.code === "UNAUTHORIZED") || (error instanceof FavoriteWorkflowError && error.code === "UNAUTHORIZED")) {
     return NextResponse.json({ code: "UNAUTHORIZED", error: "请先登录" }, { status: 401 });
+  }
+  if (error instanceof JsonBodyError) {
+    return NextResponse.json(
+      { code: error.code === "too_large" ? "PAYLOAD_TOO_LARGE" : "INVALID_INPUT", error: error.message },
+      { status: error.code === "too_large" ? 413 : 400 },
+    );
   }
   if (error instanceof ZodError || error instanceof RouteInputError) {
     return NextResponse.json({ code: "INVALID_INPUT", error: "请求内容无效" }, { status: 400 });
@@ -85,7 +87,7 @@ export function createInteractionHandlers({ authenticate, greetingService, favor
       async POST(request: Request) {
         try {
           const { account } = await caller(request, ["realm"]);
-          const input = sendGreetingSchema.parse(await readJson(request));
+          const input = sendGreetingSchema.parse(await readLimitedJson(request));
           return NextResponse.json({ greeting: await greetingService.send(account, input) }, { status: 201 });
         } catch (error) { return errorResponse(error); }
       },
@@ -94,7 +96,7 @@ export function createInteractionHandlers({ authenticate, greetingService, favor
       async POST(request: Request, id: string) {
         try {
           const { account } = await caller(request, ["realm"]);
-          const input = greetingActionSchema.parse(await readJson(request));
+          const input = greetingActionSchema.parse(await readLimitedJson(request));
           const greetingId = z.string().uuid().parse(id);
           return NextResponse.json({ greeting: await greetingService.respond(account, greetingId, input) });
         } catch (error) { return errorResponse(error); }
@@ -117,14 +119,14 @@ export function createInteractionHandlers({ authenticate, greetingService, favor
       async POST(request: Request) {
         try {
           const { account } = await caller(request, ["realm"]);
-          const target = favoriteTargetSchema.parse(await readJson(request));
+          const target = favoriteTargetSchema.parse(await readLimitedJson(request));
           return NextResponse.json({ favorite: await favoriteService.add(account, target) }, { status: 201 });
         } catch (error) { return errorResponse(error); }
       },
       async DELETE(request: Request) {
         try {
           const { account } = await caller(request, ["realm"]);
-          const target = favoriteTargetSchema.parse(await readJson(request));
+          const target = favoriteTargetSchema.parse(await readLimitedJson(request));
           await favoriteService.remove(account, target);
           return new NextResponse(null, { status: 204 });
         } catch (error) { return errorResponse(error); }
