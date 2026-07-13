@@ -1,11 +1,12 @@
 "use client";
 
-import { useState } from "react";
+import { useRef, useState } from "react";
 
 import { RegionPicker } from "@/components/forms/region-picker";
+import { FormField } from "@/components/ui/form-field";
 import type { RegionDto } from "@/features/regions/schema";
 import type { TeacherIdentityType } from "@/features/teachers/schema";
-import type { TeacherProfile } from "@/features/teachers/service";
+import type { TeacherProfileDto } from "@/features/teachers/service";
 
 import { ProfileCard } from "./profile-card";
 
@@ -25,7 +26,7 @@ type EditableProfile = {
   extraRegionIds: string[];
 };
 
-function initialValues(profile: TeacherProfile | null): EditableProfile {
+function initialValues(profile: TeacherProfileDto | null): EditableProfile {
   return {
     publicNickname: profile?.publicNickname ?? "",
     identityType: profile?.identityType ?? null,
@@ -50,7 +51,7 @@ export function ProfileForm({
   initialProfile,
   subjects,
 }: {
-  initialProfile: TeacherProfile | null;
+  initialProfile: TeacherProfileDto | null;
   subjects: SubjectOption[];
 }) {
   const [values, setValues] = useState(() => initialValues(initialProfile));
@@ -59,6 +60,9 @@ export function ProfileForm({
   const [notice, setNotice] = useState("");
   const [busy, setBusy] = useState(false);
   const [showPreview, setShowPreview] = useState(false);
+  const operationLocked = useRef(false);
+  const operationSequence = useRef(0);
+  const valuesVersion = useRef(0);
 
   const [regionNames, setRegionNames] = useState(() => new Map([
     ...(initialProfile?.primaryRegion ? [[initialProfile.primaryRegion.id, initialProfile.primaryRegion.name] as const] : []),
@@ -74,9 +78,12 @@ export function ProfileForm({
     });
   }
 
-  const previewProfile: TeacherProfile = {
-    id: savedProfile?.id ?? "preview",
-    accountId: savedProfile?.accountId ?? "preview",
+  function updateValues(next: EditableProfile) {
+    valuesVersion.current += 1;
+    setValues(next);
+  }
+
+  const previewProfile: TeacherProfileDto = {
     publicNickname: values.publicNickname,
     identityType: values.identityType,
     bio: values.bio || null,
@@ -98,24 +105,51 @@ export function ProfileForm({
     return messages?.length ? <p className="form-field__error" role="alert">{messages[0]}</p> : null;
   }
 
-  async function saveDraft(successMessage = "草稿已保存") {
+  type Operation = { id: number; version: number; snapshot: EditableProfile };
+
+  function beginOperation(): Operation | null {
+    if (operationLocked.current) return null;
+    operationLocked.current = true;
+    const operation = {
+      id: ++operationSequence.current,
+      version: valuesVersion.current,
+      snapshot: values,
+    };
     setBusy(true);
     setNotice("");
     setFieldErrors({});
+    return operation;
+  }
+
+  function operationIsCurrent(operation: Operation) {
+    return operation.id === operationSequence.current && operation.version === valuesVersion.current;
+  }
+
+  function endOperation(operation: Operation) {
+    if (operation.id !== operationSequence.current) return;
+    operationLocked.current = false;
+    setBusy(false);
+  }
+
+  async function performSave(operation: Operation, successMessage: string) {
     try {
       const response = await fetch("/api/teacher/profile", {
         method: "PUT",
         headers: { "content-type": "application/json" },
-        body: JSON.stringify(values),
+        body: JSON.stringify(operation.snapshot),
       });
       const payload = await response.json();
+      if (!operationIsCurrent(operation)) {
+        setNotice("资料已发生变化，请重新操作");
+        return null;
+      }
       if (!response.ok) {
         setFieldErrors(payload.fieldErrors ?? {});
         setNotice(payload.error ?? "保存失败，请稍后重试");
         return null;
       }
       setSavedProfile(payload.profile);
-      const saved = payload.profile as TeacherProfile;
+      const saved = payload.profile as TeacherProfileDto;
       setRegionNames((current) => new Map([
         ...current,
         ...(saved.primaryRegion ? [[saved.primaryRegion.id, saved.primaryRegion.name] as const] : []),
@@ -124,24 +158,42 @@ export function ProfileForm({
       setNotice(successMessage);
       return saved;
     } catch {
-      setNotice("网络连接异常，请稍后重试");
+      if (operationIsCurrent(operation)) setNotice("网络连接异常，请稍后重试");
       return null;
+    }
+  }
+
+  async function saveDraft(successMessage = "草稿已保存") {
+    const operation = beginOperation();
+    if (!operation) return;
+    try {
+      await performSave(operation, successMessage);
     } finally {
-      setBusy(false);
+      endOperation(operation);
     }
   }
 
   async function changePublication(action: "publish" | "unpublish") {
-    if (action === "publish" && !await saveDraft("资料已保存，正在发布")) return;
-    setBusy(true);
-    setFieldErrors({});
+    const operation = beginOperation();
+    if (!operation) return;
     try {
+      if (action === "publish") {
+        if (!await performSave(operation, "资料已保存，正在发布")) return;
+        if (!operationIsCurrent(operation)) {
+          setNotice("资料已发生变化，请重新操作");
+          return;
+        }
+      }
       const response = await fetch("/api/teacher/profile", {
         method: "POST",
         headers: { "content-type": "application/json" },
         body: JSON.stringify({ action }),
       });
       const payload = await response.json();
+      if (!operationIsCurrent(operation)) {
+        setNotice("资料已发生变化，请重新操作");
+        return;
+      }
       if (!response.ok) {
         setFieldErrors(payload.fieldErrors ?? {});
         setNotice(payload.error ?? "操作失败，请稍后重试");
@@ -150,26 +202,25 @@ export function ProfileForm({
       setSavedProfile(payload.profile);
       setNotice(action === "publish" ? "资料已发布" : "资料已下架并转为草稿");
     } catch {
-      setNotice("网络连接异常，请稍后重试");
+      if (operationIsCurrent(operation)) setNotice("网络连接异常，请稍后重试");
     } finally {
-      setBusy(false);
+      endOperation(operation);
     }
   }
 
   return (
     <div className="profile-workspace">
       <form className="teacher-profile-form" onSubmit={(event) => { event.preventDefault(); void saveDraft(); }}>
+        <fieldset className="profile-form-fields" disabled={busy}>
         <section className="profile-form-section">
           <div className="profile-form-section__title"><span>01</span><div><h2>公开名片</h2><p>这些信息会展示给正在寻找老师的家长。</p></div></div>
           <div className="profile-form-grid">
-            <div className="form-field">
-              <label htmlFor="publicNickname">公开昵称</label>
-              <input id="publicNickname" maxLength={40} value={values.publicNickname} onChange={(event) => setValues({ ...values, publicNickname: event.target.value })} />
-              {errorFor("publicNickname")}
-            </div>
+            <FormField error={fieldErrors.publicNickname?.[0]} htmlFor="publicNickname" label="公开昵称">
+              <input id="publicNickname" maxLength={40} value={values.publicNickname} onChange={(event) => updateValues({ ...values, publicNickname: event.target.value })} />
+            </FormField>
             <div className="form-field">
               <label htmlFor="identityType">身份类型</label>
-              <select id="identityType" value={values.identityType ?? ""} onChange={(event) => setValues({ ...values, identityType: (event.target.value || null) as TeacherIdentityType | null })}>
+              <select id="identityType" value={values.identityType ?? ""} onChange={(event) => updateValues({ ...values, identityType: (event.target.value || null) as TeacherIdentityType | null })}>
                 <option value="">请选择身份</option>
                 <option value="UNIVERSITY_STUDENT">在校大学生</option>
                 <option value="FULL_TIME_TEACHER">全职教师</option>
@@ -180,29 +231,29 @@ export function ProfileForm({
           </div>
           <div className="form-field">
             <label htmlFor="bio">个人简介与教学经历</label>
-            <textarea id="bio" maxLength={2000} rows={6} value={values.bio} onChange={(event) => setValues({ ...values, bio: event.target.value })} />
+            <textarea id="bio" maxLength={2000} rows={6} value={values.bio} onChange={(event) => updateValues({ ...values, bio: event.target.value })} />
             <p className="form-field__hint">建议说明擅长阶段、教学方法与代表性经历，发布时至少 20 字。</p>
             {errorFor("bio")}
           </div>
           <div className="profile-form-grid profile-form-grid--three">
             <div className="form-field">
               <label htmlFor="yearsExperience">教学年限</label>
-              <input id="yearsExperience" min="0" max="80" type="number" value={values.yearsExperience ?? ""} onChange={(event) => setValues({ ...values, yearsExperience: event.target.value ? Number(event.target.value) : null })} />
+              <input id="yearsExperience" min="0" max="80" type="number" value={values.yearsExperience ?? ""} onChange={(event) => updateValues({ ...values, yearsExperience: event.target.value ? Number(event.target.value) : null })} />
               {errorFor("yearsExperience")}
             </div>
             <div className="form-field">
               <label htmlFor="rateMin">最低时薪（元）</label>
-              <input id="rateMin" min="0" max="1000" step="1" type="number" value={values.rateMinCents === null ? "" : values.rateMinCents / 100} onChange={(event) => setValues({ ...values, rateMinCents: centsFromInput(event.target.value) })} />
+              <input id="rateMin" min="0" max="1000" step="1" type="number" value={values.rateMinCents === null ? "" : values.rateMinCents / 100} onChange={(event) => updateValues({ ...values, rateMinCents: centsFromInput(event.target.value) })} />
               {errorFor("rateMinCents")}
             </div>
             <div className="form-field">
               <label htmlFor="rateMax">最高时薪（元）</label>
-              <input id="rateMax" min="0" max="1000" step="1" type="number" value={values.rateMaxCents === null ? "" : values.rateMaxCents / 100} onChange={(event) => setValues({ ...values, rateMaxCents: centsFromInput(event.target.value) })} />
+              <input id="rateMax" min="0" max="1000" step="1" type="number" value={values.rateMaxCents === null ? "" : values.rateMaxCents / 100} onChange={(event) => updateValues({ ...values, rateMaxCents: centsFromInput(event.target.value) })} />
               {errorFor("rateMaxCents")}
             </div>
           </div>
           <label className="profile-checkbox profile-checkbox--online">
-            <input checked={values.online} type="checkbox" onChange={(event) => setValues({ ...values, online: event.target.checked })} />
+            <input checked={values.online} type="checkbox" onChange={(event) => updateValues({ ...values, online: event.target.checked })} />
             <span><strong>支持线上授课</strong><small>允许家长在地区之外看到你的线上服务</small></span>
           </label>
         </section>
@@ -212,34 +263,36 @@ export function ProfileForm({
           <div className="subject-options">
             {subjects.map((subject) => (
               <label className="profile-checkbox" key={subject.id}>
-                <input checked={values.subjectIds.includes(subject.id)} type="checkbox" onChange={(event) => setValues({ ...values, subjectIds: event.target.checked ? [...values.subjectIds, subject.id] : values.subjectIds.filter((id) => id !== subject.id) })} />
+                <input checked={values.subjectIds.includes(subject.id)} type="checkbox" onChange={(event) => updateValues({ ...values, subjectIds: event.target.checked ? [...values.subjectIds, subject.id] : values.subjectIds.filter((id) => id !== subject.id) })} />
                 <span><strong>{subject.name}</strong></span>
               </label>
             ))}
           </div>
+          {!subjects.length ? <p className="auth-form__error">暂无可选科目，请稍后再试</p> : null}
           {errorFor("subjectIds")}
         </section>
 
         <section className="profile-form-section">
           <div className="profile-form-section__title"><span>03</span><div><h2>授课地区</h2><p>选择一个主地区，可再添加最多四个额外区县。</p></div></div>
-          {values.primaryRegionId ? <p className="selected-region">主地区：<strong>{regionNames.get(values.primaryRegionId) ?? "新选择区县"}</strong><button type="button" onClick={() => setValues({ ...values, primaryRegionId: null })}>移除</button></p> : null}
+          {values.primaryRegionId ? <p className="selected-region">主地区：<strong>{regionNames.get(values.primaryRegionId) ?? "新选择区县"}</strong><button type="button" onClick={() => updateValues({ ...values, primaryRegionId: null })}>移除</button></p> : null}
           <RegionPicker onChange={(primaryRegionId, region) => {
             rememberRegion(region);
-            setValues({ ...values, primaryRegionId });
-          }} />
+            updateValues({ ...values, primaryRegionId });
+          }} disabled={busy} />
           {errorFor("primaryRegionId")}
           <div className="extra-regions">
             <h3>额外地区 <span>{values.extraRegionIds.length}/4</span></h3>
-            {values.extraRegionIds.map((id) => <p className="selected-region" key={id}>{regionNames.get(id) ?? "新选择区县"}<button type="button" onClick={() => setValues({ ...values, extraRegionIds: values.extraRegionIds.filter((regionId) => regionId !== id) })}>移除</button></p>)}
+            {values.extraRegionIds.map((id) => <p className="selected-region" key={id}>{regionNames.get(id) ?? "新选择区县"}<button type="button" onClick={() => updateValues({ ...values, extraRegionIds: values.extraRegionIds.filter((regionId) => regionId !== id) })}>移除</button></p>)}
             {values.extraRegionIds.length < 4 ? <RegionPicker onChange={(id, region) => {
               if (id && id !== values.primaryRegionId && !values.extraRegionIds.includes(id)) {
                 rememberRegion(region);
-                setValues({ ...values, extraRegionIds: [...values.extraRegionIds, id] });
+                updateValues({ ...values, extraRegionIds: [...values.extraRegionIds, id] });
               }
-            }} /> : null}
+            }} disabled={busy} /> : null}
             {errorFor("extraRegionIds")}
           </div>
         </section>
+        </fieldset>
 
         <div className="profile-form-actions">
           <button className="button button--outline" disabled={busy} type="submit">保存草稿</button>

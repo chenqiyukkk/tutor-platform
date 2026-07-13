@@ -833,6 +833,7 @@ h3 {
 .teacher-profile-page__intro > p:last-child { max-width: 620px; margin: 0; color: var(--color-ink-soft); font-size: var(--text-lg); }
 .profile-workspace { display: grid; align-items: start; gap: var(--space-7); grid-template-columns: minmax(0, 1fr); }
 .teacher-profile-form { display: grid; gap: var(--space-6); }
+.profile-form-fields { display: grid; min-width: 0; padding: 0; margin: 0; border: 0; gap: var(--space-6); }
 .profile-form-section { display: grid; padding: clamp(1.4rem, 4vw, 2.5rem); border: 1px solid var(--color-line-dark); background: var(--color-paper-light); box-shadow: var(--shadow-paper); gap: var(--space-6); }
 .profile-form-section__title { display: grid; align-items: start; padding-bottom: var(--space-5); border-bottom: 1px solid var(--color-line); gap: var(--space-4); grid-template-columns: 54px 1fr; }
 .profile-form-section__title > span { color: var(--color-vermilion); font-family: var(--font-display); font-size: var(--text-xl); font-weight: 800; }

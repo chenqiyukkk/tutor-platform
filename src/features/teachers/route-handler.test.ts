@@ -45,6 +45,11 @@ function setup() {
 }
 
 describe("/api/teacher/profile handlers", () => {
+  it("does not expose PATCH because profile saves are full replacements", () => {
+    const { handlers } = setup();
+    expect(handlers).not.toHaveProperty("PATCH");
+  });
+
   it("GET authenticates from the teacher cookie and returns only the current profile DTO", async () => {
     const { authenticate, handlers } = setup();
     const response = await handlers.GET(new Request("http://localhost/api/teacher/profile", {
@@ -53,7 +58,10 @@ describe("/api/teacher/profile handlers", () => {
 
     expect(response.status).toBe(200);
     expect(authenticate).toHaveBeenCalledWith("session-token");
-    await expect(response.json()).resolves.toMatchObject({ profile: { accountId: account.id } });
+    const payload = await response.json();
+    expect(payload.profile).not.toHaveProperty("id");
+    expect(payload.profile).not.toHaveProperty("accountId");
+    expect(payload.profile).toMatchObject({ publicNickname: "林老师" });
   });
 
   it("PUT rejects accountId and returns field-level validation errors", async () => {
@@ -103,18 +111,16 @@ describe("/api/teacher/profile handlers", () => {
   it.each([
     ["GET", undefined],
     ["PUT", undefined],
-    ["PATCH", undefined],
     ["POST publish", undefined],
     ["POST unpublish", undefined],
     ["GET", "parent-token"],
     ["PUT", "parent-token"],
-    ["PATCH", "parent-token"],
     ["POST publish", "parent-token"],
     ["POST unpublish", "parent-token"],
   ])("rejects %s for missing or non-teacher session before profile access", async (operation, token) => {
     const guarded = setup();
     guarded.authenticate.mockRejectedValue(new AuthError("UNAUTHORIZED", "登录状态无效或已过期"));
-    const method = operation.split(" ")[0] as "GET" | "PUT" | "PATCH" | "POST";
+    const method = operation.split(" ")[0] as "GET" | "PUT" | "POST";
     const action = operation.split(" ")[1];
     const request = new Request("http://localhost/api/teacher/profile", {
       method,

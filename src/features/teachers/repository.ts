@@ -160,9 +160,31 @@ export class PrismaTeacherProfileRepository implements TeacherProfileRepository 
         WHERE "accountId" = ${accountId}::uuid
         FOR UPDATE
       `;
-      const current = await findOwned(transaction, accountId);
+      let current = await findOwned(transaction, accountId);
       if (!current) throw new TeacherProfileError("NOT_FOUND", "教师资料不存在");
       if (published) {
+        const subjectIds = current.subjects.map(({ subjectId }) => subjectId).sort();
+        const regionIds = current.serviceAreas.map(({ regionId }) => regionId).sort();
+        // Task 12 must lock Subject IDs, then Region IDs in this same sorted order and
+        // atomically unpublish affected profiles before an administrator deactivates rows.
+        // These locks close only the publish validation/commit window; they do not create
+        // a permanent invariant after this transaction commits.
+        if (subjectIds.length) {
+          await transaction.$queryRaw`
+            SELECT "id" FROM "Subject"
+            WHERE "id" IN (${Prisma.join(subjectIds)})
+            ORDER BY "id" FOR SHARE
+          `;
+        }
+        if (regionIds.length) {
+          await transaction.$queryRaw`
+            SELECT "id" FROM "Region"
+            WHERE "id" IN (${Prisma.join(regionIds)})
+            ORDER BY "id" FOR SHARE
+          `;
+        }
+        current = await findOwned(transaction, accountId);
+        if (!current) throw new TeacherProfileError("NOT_FOUND", "教师资料不存在");
         const fieldErrors = validatePublishable(toProfile(current));
         if (Object.keys(fieldErrors).length) {
           throw new TeacherProfileError(

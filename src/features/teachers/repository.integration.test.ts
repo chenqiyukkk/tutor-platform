@@ -193,6 +193,48 @@ describe("Prisma teacher profile repository", () => {
       bio: null,
       status: "DRAFT",
     });
+
+    await service.saveDraft(teacherA, {
+      publicNickname: "A 老师",
+      identityType: "FULL_TIME_TEACHER",
+      bio: "长期从事一线教学，能够根据学生情况设计清晰的学习路径。",
+      yearsExperience: 8,
+      online: true,
+      rateMinCents: 10000,
+      rateMaxCents: 18000,
+      subjectIds: [subjects[1].id],
+      primaryRegionId: regions[5].id,
+    });
+    const triggerFunction = `test_teacher_publish_sleep_${marker}`;
+    const triggerName = `test_teacher_publish_trigger_${marker}`;
+    await prisma.$executeRawUnsafe(`
+      CREATE FUNCTION "${triggerFunction}"() RETURNS trigger LANGUAGE plpgsql AS $$
+      BEGIN
+        IF NEW.status = 'PUBLISHED' THEN PERFORM pg_sleep(1); END IF;
+        RETURN NEW;
+      END $$;
+      CREATE TRIGGER "${triggerName}"
+      BEFORE UPDATE ON "TeacherProfile"
+      FOR EACH ROW EXECUTE FUNCTION "${triggerFunction}"();
+    `);
+    const delayedPublish = repository.setPublished(accountA.id, true);
+    try {
+      await new Promise((resolve) => setTimeout(resolve, 200));
+      const deactivate = prisma.$transaction(async (transaction) => {
+        await transaction.$executeRaw`SET LOCAL lock_timeout = '100ms'`;
+        await transaction.subject.update({
+          where: { id: subjects[1].id },
+          data: { isActive: false },
+        });
+      });
+      await expect(deactivate).rejects.toThrow();
+      await expect(delayedPublish).resolves.toMatchObject({ status: "PUBLISHED" });
+    } finally {
+      await delayedPublish.catch(() => undefined);
+      await prisma.$executeRawUnsafe(`DROP TRIGGER IF EXISTS "${triggerName}" ON "TeacherProfile"`);
+      await prisma.$executeRawUnsafe(`DROP FUNCTION IF EXISTS "${triggerFunction}"()`);
+      await prisma.subject.update({ where: { id: subjects[1].id }, data: { isActive: true } });
+    }
   });
 
   it("enforces rate database checks at both legal boundaries without partial updates", async () => {

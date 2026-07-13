@@ -29,11 +29,13 @@ async function fetchRegionsFromApi(
 }
 
 type RegionPickerProps = {
+  disabled?: boolean;
   fetchRegions?: FetchRegions;
   onChange: (districtId: string | null, district?: RegionDto) => void;
 };
 
 export function RegionPicker({
+  disabled = false,
   fetchRegions = fetchRegionsFromApi,
   onChange,
 }: RegionPickerProps) {
@@ -154,7 +156,7 @@ export function RegionPicker({
       <div className="form-field">
         <label htmlFor={`${id}-province`}>省份</label>
         <select
-          disabled={loadingLevel === 1 || provinces.length === 0}
+          disabled={disabled || loadingLevel === 1 || provinces.length === 0}
           id={`${id}-province`}
           onChange={(event) => changeProvince(event.target.value)}
           value={provinceId}
@@ -166,7 +168,7 @@ export function RegionPicker({
       <div className="form-field">
         <label htmlFor={`${id}-city`}>城市</label>
         <select
-          disabled={!provinceId || loadingLevel === 2 || cities.length === 0}
+          disabled={disabled || !provinceId || loadingLevel === 2 || cities.length === 0}
           id={`${id}-city`}
           onChange={(event) => changeCity(event.target.value)}
           value={cityId}
@@ -178,7 +180,7 @@ export function RegionPicker({
       <div className="form-field">
         <label htmlFor={`${id}-district`}>区县</label>
         <select
-          disabled={!cityId || loadingLevel === 3 || districts.length === 0}
+          disabled={disabled || !cityId || loadingLevel === 3 || districts.length === 0}
           id={`${id}-district`}
           onChange={(event) => changeDistrict(event.target.value)}
           value={districtId}

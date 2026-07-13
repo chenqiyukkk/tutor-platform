@@ -1,4 +1,4 @@
-import { render, screen, waitFor } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
@@ -25,6 +25,12 @@ const profile: TeacherProfile = {
 };
 
 afterEach(() => vi.unstubAllGlobals());
+
+function deferred<T>() {
+  let resolve!: (value: T) => void;
+  const promise = new Promise<T>((resolvePromise) => { resolve = resolvePromise; });
+  return { promise, resolve };
+}
 
 describe("ProfileForm", () => {
   it("submits editable public fields and selected subjects as a draft", async () => {
@@ -64,7 +70,10 @@ describe("ProfileForm", () => {
 
     await userEvent.click(screen.getByRole("button", { name: "保存草稿" }));
 
-    expect(await screen.findByText("公开昵称不能超过 40 个字符")).toHaveAttribute("role", "alert");
+    const error = await screen.findByText("公开昵称不能超过 40 个字符");
+    expect(error).toHaveAttribute("role", "alert");
+    expect(screen.getByLabelText("公开昵称")).toHaveAttribute("aria-invalid", "true");
+    expect(screen.getByLabelText("公开昵称")).toHaveAttribute("aria-errormessage", error.id);
   });
 
   it("opens a privacy-safe profile preview", async () => {
@@ -136,5 +145,61 @@ describe("ProfileForm", () => {
     await userEvent.click(screen.getByRole("button", { name: "下架资料" }));
     expect(await screen.findByText("资料已下架并转为草稿")).toBeInTheDocument();
     expect(actions).toEqual(["publish", "unpublish"]);
+  });
+
+  it("locks the whole form synchronously and ignores rapid duplicate publish clicks", async () => {
+    const draftResponse = deferred<Response>();
+    const fetchMock = vi.fn().mockImplementation((input: string, init?: RequestInit) => {
+      if (input.startsWith("/api/regions")) return Promise.resolve(new Response("[]"));
+      if (init?.method === "PUT") return draftResponse.promise;
+      return Promise.resolve(new Response(JSON.stringify({
+        profile: { ...profile, status: "PUBLISHED" },
+      }), { status: 200, headers: { "content-type": "application/json" } }));
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    render(<ProfileForm initialProfile={profile} subjects={[subject]} />);
+
+    const publish = screen.getByRole("button", { name: "发布资料" });
+    fireEvent.click(publish);
+    fireEvent.click(publish);
+
+    expect(screen.getByLabelText("公开昵称")).toBeDisabled();
+    expect(screen.getByLabelText("数学")).toBeDisabled();
+    expect(screen.getAllByLabelText("省份")[0]).toBeDisabled();
+    expect(fetchMock.mock.calls.filter(([, init]) => init?.method === "PUT")).toHaveLength(1);
+
+    draftResponse.resolve(new Response(JSON.stringify({ profile }), {
+      status: 200,
+      headers: { "content-type": "application/json" },
+    }));
+    expect(await screen.findByText("资料已发布")).toBeInTheDocument();
+    expect(fetchMock.mock.calls.filter(([, init]) => init?.method === "POST")).toHaveLength(1);
+  });
+
+  it("does not publish or apply a stale save response when values change in flight", async () => {
+    const draftResponse = deferred<Response>();
+    const fetchMock = vi.fn().mockImplementation((input: string, init?: RequestInit) => {
+      if (input.startsWith("/api/regions")) return Promise.resolve(new Response("[]"));
+      if (init?.method === "PUT") return draftResponse.promise;
+      return Promise.resolve(new Response("{}", { status: 200 }));
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    render(<ProfileForm initialProfile={profile} subjects={[subject]} />);
+
+    fireEvent.click(screen.getByRole("button", { name: "发布资料" }));
+    const nickname = screen.getByLabelText("公开昵称");
+    fireEvent.change(nickname, { target: { value: "请求中的新值" } });
+    draftResponse.resolve(new Response(JSON.stringify({
+      profile: { ...profile, publicNickname: "服务器陈旧值" },
+    }), { status: 200, headers: { "content-type": "application/json" } }));
+
+    expect(await screen.findByText("资料已发生变化，请重新操作")).toBeInTheDocument();
+    expect(fetchMock.mock.calls.filter(([, init]) => init?.method === "POST")).toHaveLength(0);
+    expect(screen.getByLabelText("公开昵称")).toHaveValue("请求中的新值");
+  });
+
+  it("shows an honest empty state when no active subjects are available", () => {
+    render(<ProfileForm initialProfile={null} subjects={[]} />);
+    expect(screen.getByText("暂无可选科目，请稍后再试")).toBeInTheDocument();
   });
 });

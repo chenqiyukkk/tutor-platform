@@ -8,4 +8,4 @@ const handlers = createTeacherProfileHandlers({
   service: getTeacherProfileService(),
 });
 
-export const { GET, PATCH, POST, PUT } = handlers;
+export const { GET, POST, PUT } = handlers;

@@ -10,6 +10,12 @@ ALTER TABLE "TeacherProfile"
   ADD COLUMN "hourlyRateMax" DECIMAL(10,2),
   ADD COLUMN "isOnline" BOOLEAN NOT NULL DEFAULT false;
 
+-- Legacy hourlyRate was nullable and unconstrained. Preserve the profile while
+-- dropping only an invalid optional rate before validating the new invariant.
+UPDATE "TeacherProfile"
+SET "hourlyRate" = NULL
+WHERE "hourlyRate" < 0 OR "hourlyRate" > 1000;
+
 ALTER TABLE "TeacherProfile"
   ADD CONSTRAINT "TeacherProfile_hourly_rate_range_check"
   CHECK (

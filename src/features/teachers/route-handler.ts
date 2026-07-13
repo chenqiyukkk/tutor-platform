@@ -7,6 +7,7 @@ import { sessionCookieNames } from "@/features/auth/session";
 import {
   TeacherProfileError,
   calculateProfileCompletion,
+  toTeacherProfileDto,
   type TeacherProfileService,
 } from "./service";
 
@@ -61,7 +62,10 @@ export function createTeacherProfileHandlers({ authenticate, service }: HandlerD
   async function save(request: Request) {
     try {
       const result = await service.saveDraft(await account(request), await readJson(request));
-      return NextResponse.json({ profile: result, completion: calculateProfileCompletion(result) });
+      return NextResponse.json({
+        profile: toTeacherProfileDto(result),
+        completion: calculateProfileCompletion(result),
+      });
     } catch (error) {
       return errorResponse(error);
     }
@@ -72,13 +76,15 @@ export function createTeacherProfileHandlers({ authenticate, service }: HandlerD
       try {
         const profile = await service.get(await account(request));
         if (!profile) throw new TeacherProfileError("NOT_FOUND", "教师资料不存在");
-        return NextResponse.json({ profile, completion: calculateProfileCompletion(profile) });
+        return NextResponse.json({
+          profile: toTeacherProfileDto(profile),
+          completion: calculateProfileCompletion(profile),
+        });
       } catch (error) {
         return errorResponse(error);
       }
     },
     PUT: save,
-    PATCH: save,
     async POST(request: Request) {
       try {
         const caller = await account(request);
@@ -86,7 +92,10 @@ export function createTeacherProfileHandlers({ authenticate, service }: HandlerD
         const profile = action === "publish"
           ? await service.publish(caller)
           : await service.unpublish(caller);
-        return NextResponse.json({ profile, completion: calculateProfileCompletion(profile) });
+        return NextResponse.json({
+          profile: toTeacherProfileDto(profile),
+          completion: calculateProfileCompletion(profile),
+        });
       } catch (error) {
         return errorResponse(error);
       }

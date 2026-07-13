@@ -25,6 +25,15 @@ export type TeacherProfile = {
   extraRegions: Array<{ id: string; name: string }>;
 };
 
+export type TeacherProfileDto = Omit<TeacherProfile, "id" | "accountId">;
+
+export function toTeacherProfileDto(profile: TeacherProfile): TeacherProfileDto {
+  const dto = { ...profile } as Partial<TeacherProfile>;
+  delete dto.id;
+  delete dto.accountId;
+  return dto as TeacherProfileDto;
+}
+
 export type SavedTeacherProfile = {
   publicNickname: string;
   identityType: TeacherIdentityType | null;

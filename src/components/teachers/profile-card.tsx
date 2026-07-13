@@ -1,4 +1,4 @@
-import type { TeacherProfile } from "@/features/teachers/service";
+import type { TeacherProfileDto } from "@/features/teachers/service";
 
 const identityLabels = {
   UNIVERSITY_STUDENT: "在校大学生",
@@ -6,7 +6,7 @@ const identityLabels = {
   OTHER: "其他教育从业者",
 } as const;
 
-function rateLabel(profile: TeacherProfile) {
+function rateLabel(profile: TeacherProfileDto) {
   if (profile.rateMinCents === null || profile.rateMaxCents === null) return "价格面议";
   const minimum = profile.rateMinCents / 100;
   const maximum = profile.rateMaxCents / 100;
@@ -15,7 +15,7 @@ function rateLabel(profile: TeacherProfile) {
     : `${minimum}–${maximum} 元/小时`;
 }
 
-export function ProfileCard({ profile }: { profile: TeacherProfile }) {
+export function ProfileCard({ profile }: { profile: TeacherProfileDto }) {
   const nickname = profile.publicNickname.trim() || "未填写公开昵称";
   return (
     <article className="teacher-profile-card" aria-label="教师公开资料预览">
