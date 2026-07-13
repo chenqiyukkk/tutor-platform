@@ -5,6 +5,7 @@ import { z } from "zod";
 
 import { CircleRibbon } from "@/components/directory/circle-ribbon";
 import { DirectoryContactCta } from "@/components/directory/contact-cta";
+import { GreetingComposer } from "@/components/greetings/greeting-composer";
 import { resolveRequestCircleTier } from "@/features/directory/circle";
 import { formatDirectoryDate } from "@/features/directory/date";
 import { getAdjacentRegionPairs, getDirectoryAccessContext } from "@/features/directory/personalization";
@@ -42,7 +43,7 @@ export default async function RequestDetailPage({ params }: { params: Promise<{ 
           <section><p className="eyebrow">辅导科目</p><ul className="directory-tags">{request.subjects.map((subject) => <li key={subject.id}>{subject.name}</li>)}</ul></section>
           <footer>发布于 {request.publishedAt ? formatDirectoryDate(request.publishedAt) : "未知日期"} · 学生内部备注、家长资料与联系方式均不公开</footer>
         </article>
-        <DirectoryContactCta isLoggedIn={access.authenticated} kind="request" />
+        {access.authenticated ? <GreetingComposer realm="teacher" requestId={request.id} targetId={request.id} /> : <DirectoryContactCta kind="request" />}
       </div>
     </main>
   );

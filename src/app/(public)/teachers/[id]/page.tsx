@@ -5,11 +5,13 @@ import { z } from "zod";
 
 import { CircleRibbon } from "@/components/directory/circle-ribbon";
 import { DirectoryContactCta } from "@/components/directory/contact-cta";
+import { GreetingComposer } from "@/components/greetings/greeting-composer";
 import { resolveTeacherCircleTier } from "@/features/directory/circle";
 import { formatDirectoryDate } from "@/features/directory/date";
 import { getAdjacentRegionPairs, getDirectoryAccessContext } from "@/features/directory/personalization";
 import { directoryRepository } from "@/features/directory/server";
 import type { PublicTeacherDetail } from "@/features/directory/redaction";
+import { getParentPublishedRequestOptions } from "@/features/greetings/page-data";
 
 export const metadata: Metadata = { title: "教师公开资料｜家教平台" };
 const identityLabels = { UNIVERSITY_STUDENT: "在校大学生", FULL_TIME_TEACHER: "全职教师", OTHER: "其他教育从业者" } as const;
@@ -24,6 +26,7 @@ export default async function TeacherDetailPage({ params }: { params: Promise<{ 
     : await directoryRepository.getTeacherPreview(parsed.data);
   if (!teacher) notFound();
   const detail = access.authenticated ? teacher as PublicTeacherDetail : null;
+  const greetingRequests = access.authenticated ? await getParentPublishedRequestOptions() : [];
   const viewer = access.matchingViewer;
   let tier;
   if (viewer) {
@@ -41,7 +44,7 @@ export default async function TeacherDetailPage({ params }: { params: Promise<{ 
           <section><p className="eyebrow">科目与地区</p><div className="directory-detail__columns"><div><h2>授课科目</h2><ul className="directory-tags">{teacher.subjects.map((subject) => <li key={subject.id}>{subject.name}</li>)}</ul></div><div><h2>服务区县</h2><ul className="directory-area-list">{teacher.serviceAreas.map((area) => <li key={area.id}><strong>{area.name}</strong>{area.isPrimary ? <span>主要地区</span> : null}</li>)}</ul></div></div></section>
           <footer>发布于 {teacher.publishedAt ? formatDirectoryDate(teacher.publishedAt) : "未知日期"} · 平台不会展示证件材料或联系方式</footer>
         </article>
-        <DirectoryContactCta isLoggedIn={access.authenticated} kind="teacher" />
+        {access.authenticated ? <GreetingComposer realm="parent" requestOptions={greetingRequests} targetId={teacher.id} /> : <DirectoryContactCta kind="teacher" />}
       </div>
     </main>
   );

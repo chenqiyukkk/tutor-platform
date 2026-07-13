@@ -36,6 +36,9 @@ enum GreetingStatus {
   ACCEPTED
   REJECTED
   CANCELLED
+  EXPIRED
+  REPORTED
+  BLOCKED
 }
 
 enum RequestStatus {
@@ -85,6 +88,7 @@ model Account {
   passwordResetTokens   PasswordResetToken[]
   sentGreetings         Greeting[]           @relation("SentGreetings")
   receivedGreetings     Greeting[]           @relation("ReceivedGreetings")
+  greetingAttempts      GreetingAttempt[]
   teacherConversations  Conversation[]       @relation("TeacherConversations")
   parentConversations   Conversation[]       @relation("ParentConversations")
   messages              Message[]
@@ -131,21 +135,21 @@ model PasswordResetToken {
 }
 
 model TeacherProfile {
-  id              String        @id @default(uuid()) @db.Uuid
-  accountId       String        @unique @db.Uuid
+  id              String               @id @default(uuid()) @db.Uuid
+  accountId       String               @unique @db.Uuid
   displayName     String
   identityType    TeacherIdentityType?
   headline        String?
   bio             String?
   avatarUrl       String?
   yearsExperience Int?
-  hourlyRate      Decimal?      @db.Decimal(10, 2)
-  hourlyRateMax   Decimal?      @db.Decimal(10, 2)
-  isOnline        Boolean       @default(false)
-  status          ProfileStatus @default(DRAFT)
-  publishedAt     DateTime?     @db.Timestamptz(3)
-  createdAt       DateTime      @default(now()) @db.Timestamptz(3)
-  updatedAt       DateTime      @updatedAt @db.Timestamptz(3)
+  hourlyRate      Decimal?             @db.Decimal(10, 2)
+  hourlyRateMax   Decimal?             @db.Decimal(10, 2)
+  isOnline        Boolean              @default(false)
+  status          ProfileStatus        @default(DRAFT)
+  publishedAt     DateTime?            @db.Timestamptz(3)
+  createdAt       DateTime             @default(now()) @db.Timestamptz(3)
+  updatedAt       DateTime             @updatedAt @db.Timestamptz(3)
 
   account       Account              @relation(fields: [accountId], references: [id], onDelete: Cascade)
   subjects      TeacherSubject[]
@@ -269,23 +273,23 @@ model TeacherServiceArea {
 }
 
 model TutoringRequest {
-  id               String        @id @default(uuid()) @db.Uuid
-  parentProfileId  String        @db.Uuid
-  studentProfileId String?       @db.Uuid
-  regionId         String?       @db.Uuid
-  title            String
-  description      String
-  scheduleText     String?       @map("schedule")
-  budgetMin        Int?
-  budgetMax        Int?
-  teachingMode     TeachingMode?
+  id                 String        @id @default(uuid()) @db.Uuid
+  parentProfileId    String        @db.Uuid
+  studentProfileId   String?       @db.Uuid
+  regionId           String?       @db.Uuid
+  title              String
+  description        String
+  scheduleText       String?       @map("schedule")
+  budgetMin          Int?
+  budgetMax          Int?
+  teachingMode       TeachingMode?
   publicLocationNote String?
-  status           RequestStatus @default(DRAFT)
-  publishedAt      DateTime?     @db.Timestamptz(3)
-  closedAt         DateTime?     @db.Timestamptz(3)
-  expiresAt        DateTime?     @db.Timestamptz(3)
-  createdAt        DateTime      @default(now()) @db.Timestamptz(3)
-  updatedAt        DateTime      @updatedAt @db.Timestamptz(3)
+  status             RequestStatus @default(DRAFT)
+  publishedAt        DateTime?     @db.Timestamptz(3)
+  closedAt           DateTime?     @db.Timestamptz(3)
+  expiresAt          DateTime?     @db.Timestamptz(3)
+  createdAt          DateTime      @default(now()) @db.Timestamptz(3)
+  updatedAt          DateTime      @updatedAt @db.Timestamptz(3)
 
   parentProfile  ParentProfile    @relation(fields: [parentProfileId], references: [id], onDelete: Cascade)
   studentProfile StudentProfile?  @relation(fields: [studentProfileId], references: [id], onDelete: SetNull)
@@ -293,6 +297,7 @@ model TutoringRequest {
   subjects       RequestSubject[]
   favorites      Favorite[]
   greetings      Greeting[]
+  conversations  Conversation[]
   reports        Report[]
 
   @@index([parentProfileId, status])
@@ -336,8 +341,11 @@ model Greeting {
   senderAccountId    String         @db.Uuid
   recipientAccountId String         @db.Uuid
   tutoringRequestId  String         @db.Uuid
+  contextKey         String         @unique
   message            String?
+  cardSnapshot       Json
   status             GreetingStatus @default(PENDING)
+  expiresAt          DateTime       @db.Timestamptz(3)
   respondedAt        DateTime?      @db.Timestamptz(3)
   createdAt          DateTime       @default(now()) @db.Timestamptz(3)
   updatedAt          DateTime       @updatedAt @db.Timestamptz(3)
@@ -346,27 +354,42 @@ model Greeting {
   recipient       Account         @relation("ReceivedGreetings", fields: [recipientAccountId], references: [id], onDelete: Restrict)
   tutoringRequest TutoringRequest @relation(fields: [tutoringRequestId], references: [id], onDelete: Restrict)
   conversation    Conversation?
+  report          Report?
 
-  @@unique([senderAccountId, recipientAccountId, tutoringRequestId])
   @@index([recipientAccountId, status])
+  @@index([senderAccountId, createdAt])
+  @@index([recipientAccountId, createdAt(sort: Desc), id])
   @@index([tutoringRequestId])
 }
 
+model GreetingAttempt {
+  id              String   @id @default(uuid()) @db.Uuid
+  senderAccountId String   @db.Uuid
+  attemptedAt     DateTime @default(now()) @db.Timestamptz(3)
+
+  sender Account @relation(fields: [senderAccountId], references: [id], onDelete: Cascade)
+
+  @@index([senderAccountId, attemptedAt])
+}
+
 model Conversation {
-  id            String    @id @default(uuid()) @db.Uuid
-  greetingId    String    @unique @db.Uuid
-  teacherId     String    @db.Uuid
-  parentId      String    @db.Uuid
-  lastMessageAt DateTime? @db.Timestamptz(3)
-  createdAt     DateTime  @default(now()) @db.Timestamptz(3)
-  updatedAt     DateTime  @updatedAt @db.Timestamptz(3)
+  id                String    @id @default(uuid()) @db.Uuid
+  greetingId        String    @unique @db.Uuid
+  teacherId         String    @db.Uuid
+  parentId          String    @db.Uuid
+  tutoringRequestId String    @db.Uuid
+  lastMessageAt     DateTime? @db.Timestamptz(3)
+  createdAt         DateTime  @default(now()) @db.Timestamptz(3)
+  updatedAt         DateTime  @updatedAt @db.Timestamptz(3)
 
-  greeting Greeting  @relation(fields: [greetingId], references: [id], onDelete: Restrict)
-  teacher  Account   @relation("TeacherConversations", fields: [teacherId], references: [id], onDelete: Restrict)
-  parent   Account   @relation("ParentConversations", fields: [parentId], references: [id], onDelete: Restrict)
-  messages Message[]
-  reports  Report[]
+  greeting        Greeting        @relation(fields: [greetingId], references: [id], onDelete: Restrict)
+  teacher         Account         @relation("TeacherConversations", fields: [teacherId], references: [id], onDelete: Restrict)
+  parent          Account         @relation("ParentConversations", fields: [parentId], references: [id], onDelete: Restrict)
+  tutoringRequest TutoringRequest @relation(fields: [tutoringRequestId], references: [id], onDelete: Restrict)
+  messages        Message[]
+  reports         Report[]
 
+  @@unique([teacherId, parentId, tutoringRequestId])
   @@index([teacherId, lastMessageAt])
   @@index([parentId, lastMessageAt])
 }
@@ -413,6 +436,7 @@ model Report {
   tutoringRequestId String?      @db.Uuid
   conversationId    String?      @db.Uuid
   messageId         String?      @db.Uuid
+  greetingId        String?      @unique @db.Uuid
   reason            String
   details           String?
   status            ReportStatus @default(PENDING)
@@ -427,6 +451,7 @@ model Report {
   tutoringRequest TutoringRequest? @relation(fields: [tutoringRequestId], references: [id], onDelete: SetNull)
   conversation    Conversation?    @relation(fields: [conversationId], references: [id], onDelete: SetNull)
   message         Message?         @relation(fields: [messageId], references: [id], onDelete: SetNull)
+  greeting        Greeting?        @relation(fields: [greetingId], references: [id], onDelete: SetNull)
 
   @@index([status, createdAt])
   @@index([reporterAccountId])

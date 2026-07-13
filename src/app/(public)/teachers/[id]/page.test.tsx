@@ -6,6 +6,7 @@ const mocks = vi.hoisted(() => ({
   adjacent: vi.fn(async () => []),
   detail: vi.fn(),
   preview: vi.fn(),
+  requests: vi.fn(async () => []),
 }));
 
 vi.mock("@/features/directory/personalization", () => ({
@@ -18,6 +19,7 @@ vi.mock("@/features/directory/server", () => ({
     getTeacherPreview: mocks.preview,
   },
 }));
+vi.mock("@/features/greetings/page-data", () => ({ getParentPublishedRequestOptions: mocks.requests }));
 vi.mock("next/navigation", () => ({ notFound: () => { throw new Error("not found"); } }));
 
 import TeacherDetailPage from "./page";
@@ -62,7 +64,7 @@ describe("teacher public detail page", () => {
 
     expect(screen.getByText("私密教师自述")).toBeInTheDocument();
     expect(screen.queryByRole("link", { name: /登录后/ })).not.toBeInTheDocument();
-    expect(screen.getByText("站内打招呼功能即将开放")).toBeInTheDocument();
+    expect(screen.getByText("先发布一条有效需求")).toBeInTheDocument();
     expect(mocks.preview).not.toHaveBeenCalled();
   });
 });
