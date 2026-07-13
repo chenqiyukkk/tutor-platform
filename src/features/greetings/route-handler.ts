@@ -5,6 +5,7 @@ import { AuthError, type AuthenticatedAccount } from "@/features/auth/service";
 import { sessionCookieNames } from "@/features/auth/session";
 import { readUniqueCookieValue } from "@/features/directory/detail-auth";
 import { FavoriteWorkflowError, favoriteTargetSchema } from "@/features/favorites/service";
+import { readLimitedJson } from "@/lib/json-body";
 
 import { greetingActionSchema, greetingInboxQuerySchema, sendGreetingSchema, type GreetingActionInput, type SendGreetingInput } from "./schema";
 import { GreetingWorkflowError } from "./service";
@@ -28,9 +29,7 @@ function realmFrom(params: URLSearchParams): Realm {
 }
 
 async function readJson(request: Request) {
-  const contentType = request.headers.get("content-type")?.split(";", 1)[0]?.trim().toLowerCase();
-  if (contentType !== "application/json") throw new RouteInputError("请提交 JSON 内容");
-  try { return await request.json(); } catch { throw new RouteInputError("JSON 内容格式不正确"); }
+  try { return await readLimitedJson(request); } catch { throw new RouteInputError("JSON 内容格式不正确"); }
 }
 
 function errorResponse(error: unknown) {

@@ -49,24 +49,43 @@ export function GreetingComposer({ realm, targetId, requestId, requestOptions = 
   async function submit(event: React.FormEvent) {
     event.preventDefault();
     setStatus("sending"); setMessage("");
-    const response = await fetch(`/api/greetings?realm=${realm}`, {
-      method: "POST", headers: { "content-type": "application/json" },
-      body: JSON.stringify({ targetId, requestId: selectedRequestId, note }),
-    });
-    if (response.ok) { setStatus("sent"); setMessage("打招呼已发送，请等待对方回应。"); return; }
-    setStatus("error"); setMessage(await responseMessage(response));
+    let nextStatus: "sent" | "error" = "error";
+    let nextMessage = "网络连接异常，请稍后重试";
+    try {
+      const response = await fetch(`/api/greetings?realm=${realm}`, {
+        method: "POST", headers: { "content-type": "application/json" },
+        body: JSON.stringify({ targetId, requestId: selectedRequestId, note }),
+      });
+      if (response.ok) {
+        nextStatus = "sent";
+        nextMessage = "打招呼已发送，请等待对方回应。";
+      } else {
+        nextMessage = await responseMessage(response);
+      }
+    } catch {
+      nextStatus = "error";
+    } finally {
+      setStatus(nextStatus);
+      setMessage(nextMessage);
+    }
   }
 
   async function toggleFavorite() {
     if (favorite === null) return;
     setFavoriteBusy(true);
-    const response = await fetch(`/api/favorites?realm=${realm}`, {
-      method: favorite ? "DELETE" : "POST", headers: { "content-type": "application/json" },
-      body: JSON.stringify({ targetType, targetId }),
-    });
-    if (response.ok) setFavorite((current) => current === null ? current : !current);
-    else { setStatus("error"); setMessage(await responseMessage(response)); }
-    setFavoriteBusy(false);
+    try {
+      const response = await fetch(`/api/favorites?realm=${realm}`, {
+        method: favorite ? "DELETE" : "POST", headers: { "content-type": "application/json" },
+        body: JSON.stringify({ targetType, targetId }),
+      });
+      if (response.ok) setFavorite((current) => current === null ? current : !current);
+      else { setStatus("error"); setMessage(await responseMessage(response)); }
+    } catch {
+      setStatus("error");
+      setMessage("网络连接异常，请稍后重试");
+    } finally {
+      setFavoriteBusy(false);
+    }
   }
 
   return <aside className="directory-contact greeting-composer" aria-label="站内打招呼">

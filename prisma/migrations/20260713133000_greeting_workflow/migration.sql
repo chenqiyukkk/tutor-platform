@@ -1,5 +1,15 @@
 BEGIN;
 
+-- Freeze every table read or rewritten by this migration before preflight.
+-- Keep this order in any repair tooling to avoid lock-order inversions with
+-- legacy greeting, conversation and report writers.
+LOCK TABLE "Account" IN SHARE ROW EXCLUSIVE MODE;
+LOCK TABLE "ParentProfile" IN SHARE ROW EXCLUSIVE MODE;
+LOCK TABLE "TutoringRequest" IN SHARE ROW EXCLUSIVE MODE;
+LOCK TABLE "Greeting" IN SHARE ROW EXCLUSIVE MODE;
+LOCK TABLE "Conversation" IN SHARE ROW EXCLUSIVE MODE;
+LOCK TABLE "Report" IN SHARE ROW EXCLUSIVE MODE;
+
 -- Preflight every legacy invariant before the first DDL statement. Any
 -- failure leaves the database in the exact pre-migration shape.
 DO $greeting_workflow_preflight$

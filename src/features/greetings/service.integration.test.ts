@@ -9,6 +9,8 @@ import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 vi.mock("server-only", () => ({}));
 
 import { createGreetingService } from "./service";
+import { PrismaTeacherProfileRepository } from "@/features/teachers/repository";
+import { createTeacherProfileService } from "@/features/teachers/service";
 
 if (!process.env.DATABASE_URL && existsSync(".env")) loadEnvFile(".env");
 if (!process.env.DATABASE_URL) throw new Error("DATABASE_URL is required");
@@ -135,6 +137,51 @@ describe("greeting workflow against PostgreSQL", () => {
     await expect(service.send({ id: teacherId, role: "teacher" }, { targetId: requestId, requestId, note: "可以辅导" }))
       .rejects.toMatchObject({ code: "PENDING_EXISTS" });
     await expect(prisma.greeting.count({ where: { tutoringRequestId: requestId } })).resolves.toBe(1);
+  });
+
+  it("carries the headline saved and published by the formal teacher workflow into the greeting card", async () => {
+    const parent = await account("PARENT", `headline-parent-${crypto.randomUUID().slice(0, 8)}`);
+    const teacher = await account("TEACHER", `headline-teacher-${crypto.randomUUID().slice(0, 8)}`);
+    const parentProfile = await prisma.parentProfile.create({ data: { accountId: parent.id, displayName: "标题流程家长", status: "PUBLISHED" } });
+    const student = await prisma.studentProfile.create({ data: { parentProfileId: parentProfile.id, displayName: "标题流程学生", gradeLevel: "GRADE_8" } });
+    const teacherService = createTeacherProfileService(new PrismaTeacherProfileRepository(prisma));
+    const saved = await teacherService.saveDraft({ id: teacher.id, role: "teacher" }, {
+      publicNickname: "周老师",
+      headline: "把复杂几何拆成清晰步骤",
+      identityType: "FULL_TIME_TEACHER",
+      bio: "专注初中几何教学，帮助学生建立稳定的解题方法。",
+      yearsExperience: 6,
+      online: true,
+      rateMinCents: 10_000,
+      rateMaxCents: 15_000,
+      subjectIds: [subjectIds[0]],
+      primaryRegionId: regionIds[0],
+      extraRegionIds: [],
+    });
+    expect(saved.headline).toBe("把复杂几何拆成清晰步骤");
+    await teacherService.publish({ id: teacher.id, role: "teacher" });
+    const request = await prisma.tutoringRequest.create({ data: {
+      parentProfileId: parentProfile.id,
+      studentProfileId: student.id,
+      regionId: regionIds[0],
+      title: "初二几何巩固",
+      description: "希望建立几何思路",
+      scheduleText: "周末下午",
+      budgetMin: 8_000,
+      budgetMax: 12_000,
+      teachingMode: "BOTH",
+      publicLocationNote: "图书馆附近",
+      status: "PUBLISHED",
+      publishedAt: new Date(),
+      expiresAt: new Date(Date.now() + DAY),
+    } });
+    await prisma.requestSubject.create({ data: { tutoringRequestId: request.id, subjectId: subjectIds[0] } });
+
+    const greeting = await createGreetingService(prisma).send(
+      { id: parent.id, role: "parent" },
+      { targetId: saved.id, requestId: request.id, note: "" },
+    );
+    expect(greeting.card).toMatchObject({ teacher: { headline: "把复杂几何拆成清晰步骤" } });
   });
 
   it("whitelists persisted card snapshots on inbox and response DTO boundaries", async () => {

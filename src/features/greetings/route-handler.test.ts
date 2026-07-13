@@ -55,6 +55,25 @@ describe("interaction routes", () => {
     expect(greetingService.send).not.toHaveBeenCalled();
   });
 
+  it("rejects an oversized streaming JSON body without relying on Content-Length", async () => {
+    const { handlers, greetingService } = setup();
+    const body = new ReadableStream<Uint8Array>({
+      start(controller) {
+        controller.enqueue(new TextEncoder().encode(`{"note":"${"x".repeat(17_000)}`));
+      },
+    });
+    const request = new Request("http://test/api/greetings?realm=parent", {
+      method: "POST",
+      headers: { "content-type": "application/json", cookie: "tutor_parent_session=token" },
+      body,
+      duplex: "half",
+    } as RequestInit & { duplex: "half" });
+
+    const response = await handlers.greetings.POST(request);
+    expect(response.status).toBe(400);
+    expect(greetingService.send).not.toHaveBeenCalled();
+  }, 1_000);
+
   it("loads only a strict target-specific favorite state", async () => {
     const { handlers, favoriteService } = setup();
     const headers = { cookie: "tutor_parent_session=token" };

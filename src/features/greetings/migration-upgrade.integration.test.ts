@@ -1,7 +1,7 @@
 // @vitest-environment node
 
 import { randomUUID } from "node:crypto";
-import { copyFileSync, existsSync, mkdirSync, mkdtempSync, readdirSync, rmSync, writeFileSync } from "node:fs";
+import { copyFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { basename, isAbsolute, join, relative, resolve } from "node:path";
 import { loadEnvFile } from "node:process";
@@ -25,6 +25,7 @@ const MIGRATIONS = [
   "20260713133000_greeting_workflow",
   "20260713133100_greeting_attempt",
   "20260713133200_validate_greeting_context",
+  "20260713133300_favorite_list_sort_index",
 ] as const;
 const WORKFLOW_MIGRATION = "20260713133000_greeting_workflow";
 const TEMP_WORKSPACE_ROOT = join(tmpdir(), "tutor-platform-greeting-migrations");
@@ -182,7 +183,7 @@ describe("greeting workflow migration upgrades", () => {
     expect(isSafeMigrationWorkspace(join(tmpdir(), "another-project", "run-example"))).toBe(false);
   });
 
-  it("deploys all 11 migrations into an empty database", async () => {
+  it("deploys all 12 migrations into an empty database", async () => {
     const database = await createDatabase();
     const root = createMigrationWorkspace(MIGRATIONS.length);
     const client = new Client({ connectionString: database.url });
@@ -190,7 +191,7 @@ describe("greeting workflow migration upgrades", () => {
       expectPrismaSuccess(runPrisma(root, database.url, ["migrate", "deploy"]));
       await client.connect();
       const applied = await client.query(`SELECT count(*)::int AS count FROM "_prisma_migrations" WHERE finished_at IS NOT NULL AND rolled_back_at IS NULL`);
-      expect(applied.rows[0].count).toBe(11);
+      expect(applied.rows[0].count).toBe(12);
     } finally {
       await client.end().catch(() => undefined);
       await cleanupMigrationWorkspace(root);
@@ -277,4 +278,56 @@ describe("greeting workflow migration upgrades", () => {
     },
     90_000,
   );
+
+  it("locks legacy write tables before preflight and migrates a transaction that was already in flight", async () => {
+    const database = await createDatabase();
+    const root = createMigrationWorkspace(8);
+    const writer = new Client({ connectionString: database.url });
+    const migrator = new Client({ connectionString: database.url });
+    const observer = new Client({ connectionString: database.url });
+    let migration: Promise<unknown> | undefined;
+    try {
+      expectPrismaSuccess(runPrisma(root, database.url, ["migrate", "deploy"]));
+      await Promise.all([writer.connect(), migrator.connect(), observer.connect()]);
+      const seed = await seedLegacy(writer);
+      await writer.query("BEGIN");
+      await writer.query(`UPDATE "Greeting" SET message = 'Committed legacy write' WHERE id = $1`, [seed.greetingId]);
+      const migratorPid = Number((await migrator.query(`SELECT pg_backend_pid() AS pid`)).rows[0].pid);
+      const sql = readFileSync(join(process.cwd(), "prisma", "migrations", WORKFLOW_MIGRATION, "migration.sql"), "utf8");
+      migration = migrator.query(sql);
+
+      let waitingModes: string[] = [];
+      const deadline = Date.now() + 5_000;
+      while (Date.now() < deadline) {
+        const locks = await observer.query<{ mode: string }>(`
+          SELECT mode
+          FROM pg_locks
+          WHERE pid = $1
+            AND relation = '"Greeting"'::regclass
+            AND NOT granted
+        `, [migratorPid]);
+        waitingModes = locks.rows.map(({ mode }) => mode);
+        if (waitingModes.length) break;
+        await delay(25);
+      }
+      expect(waitingModes).toContain("ShareRowExclusiveLock");
+
+      await writer.query("COMMIT");
+      await migration;
+      const migrated = await observer.query(`SELECT message, "contextKey" FROM "Greeting" WHERE id = $1`, [seed.greetingId]);
+      expect(migrated.rows[0]).toMatchObject({
+        message: "Committed legacy write",
+        contextKey: `${seed.teacherId}:${seed.parentId}:${seed.requestId}`,
+      });
+    } finally {
+      await writer.query("ROLLBACK").catch(() => undefined);
+      await migration?.catch(() => undefined);
+      await Promise.all([
+        writer.end().catch(() => undefined),
+        migrator.end().catch(() => undefined),
+        observer.end().catch(() => undefined),
+      ]);
+      await cleanupMigrationWorkspace(root);
+    }
+  }, 60_000);
 });

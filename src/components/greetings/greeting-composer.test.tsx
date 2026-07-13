@@ -47,4 +47,30 @@ describe("GreetingComposer", () => {
     expect(fetchMock.mock.calls[1]?.[1]).toMatchObject({ method: "DELETE" });
     expect(screen.getByRole("button", { name: "取消收藏" })).toBeInTheDocument();
   });
+
+  it("recovers from a network failure while sending a greeting", async () => {
+    const fetchMock = vi.fn<(input: RequestInfo | URL, init?: RequestInit) => Promise<Response>>(async (_input, init) => {
+      if (!init?.method) return Response.json({ favorite: false });
+      throw new Error("offline");
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    render(<GreetingComposer realm="teacher" targetId="00000000-0000-4000-8000-000000000002" requestId="00000000-0000-4000-8000-000000000002" />);
+
+    fireEvent.click(screen.getByRole("button", { name: "发送打招呼" }));
+    await waitFor(() => expect(screen.getByRole("alert")).toHaveTextContent("网络连接异常"));
+    expect(screen.getByRole("button", { name: "发送打招呼" })).toBeEnabled();
+  });
+
+  it("always releases favorite busy state after a network failure", async () => {
+    const fetchMock = vi.fn<(input: RequestInfo | URL, init?: RequestInit) => Promise<Response>>(async (_input, init) => {
+      if (!init?.method) return Response.json({ favorite: false });
+      throw new Error("offline");
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    render(<GreetingComposer realm="teacher" targetId="00000000-0000-4000-8000-000000000002" requestId="00000000-0000-4000-8000-000000000002" />);
+
+    fireEvent.click(await screen.findByRole("button", { name: "收藏这条资料" }));
+    await waitFor(() => expect(screen.getByRole("alert")).toHaveTextContent("网络连接异常"));
+    expect(screen.getByRole("button", { name: "收藏这条资料" })).toBeEnabled();
+  });
 });
