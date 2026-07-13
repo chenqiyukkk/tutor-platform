@@ -40,10 +40,14 @@ enum GreetingStatus {
 
 enum RequestStatus {
   DRAFT
-  OPEN
-  PAUSED
-  FILLED
+  PUBLISHED
   CLOSED
+}
+
+enum TeachingMode {
+  OFFLINE
+  ONLINE
+  BOTH
 }
 
 enum ReportStatus {
@@ -172,6 +176,7 @@ model StudentProfile {
   displayName     String
   gradeLevel      String?
   notes           String?
+  isActive        Boolean  @default(true)
   createdAt       DateTime @default(now()) @db.Timestamptz(3)
   updatedAt       DateTime @updatedAt @db.Timestamptz(3)
 
@@ -269,11 +274,14 @@ model TutoringRequest {
   regionId         String?       @db.Uuid
   title            String
   description      String
-  schedule         String?
-  budgetMin        Decimal?      @db.Decimal(10, 2)
-  budgetMax        Decimal?      @db.Decimal(10, 2)
+  scheduleText     String?       @map("schedule")
+  budgetMin        Int?
+  budgetMax        Int?
+  teachingMode     TeachingMode?
+  publicLocationNote String?
   status           RequestStatus @default(DRAFT)
   publishedAt      DateTime?     @db.Timestamptz(3)
+  closedAt         DateTime?     @db.Timestamptz(3)
   expiresAt        DateTime?     @db.Timestamptz(3)
   createdAt        DateTime      @default(now()) @db.Timestamptz(3)
   updatedAt        DateTime      @updatedAt @db.Timestamptz(3)
