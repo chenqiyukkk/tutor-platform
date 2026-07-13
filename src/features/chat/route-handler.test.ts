@@ -24,16 +24,20 @@ function setup() {
   });
   const chatService = {
     listConversations: vi.fn(async () => ({ items: [], limit: 20, nextCursor: null })),
-    listMessages: vi.fn(async () => ({ items: [], limit: 50, nextBeforeCursor: null, nextAfterCursor: null, hasMore: false })),
+    listMessages: vi.fn(async () => ({ items: [], limit: 50, nextBeforeCursor: null, nextAfterCursor: null, nextChangesCursor: null, hasMore: false })),
     sendMessage: vi.fn(async () => ({
       id: "00000000-0000-4000-8000-000000000004",
       clientMessageId,
       body: "你好",
       sentAt: "2026-07-13T12:00:00.000Z",
       readAt: null,
+      editedAt: null,
+      deletedAt: null,
+      updatedAt: "2026-07-13T12:00:00.000Z",
       mine: true,
     })),
     markRead: vi.fn(async () => ({ readCount: 1, readAt: "2026-07-13T12:00:00.000Z" })),
+    blockConversation: vi.fn(async () => ({ blocked: true as const })),
   };
   return { authenticate, chatService, handlers: createChatHandlers({ authenticate, chatService }) };
 }
@@ -73,6 +77,7 @@ describe("chat routes", () => {
     for (const url of [
       `http://test/api/conversations/${conversationId}/messages?realm=parent&before=abc&after=abc`,
       `http://test/api/conversations/${conversationId}/messages?realm=parent&after=abc&after=def`,
+      `http://test/api/conversations/${conversationId}/messages?realm=parent&before=abc&changesAfter=abc`,
     ]) {
       expect((await handlers.messages.GET(new Request(url, { headers }), conversationId)).status).toBe(400);
     }
@@ -82,7 +87,7 @@ describe("chat routes", () => {
     )).status).toBe(400);
   });
 
-  it("uses bounded strict JSON for send and read endpoints", async () => {
+  it("uses bounded strict JSON for send, exact read ids, and block endpoints", async () => {
     const { handlers, chatService } = setup();
     const headers = { cookie: "tutor_teacher_session=token", "content-type": "application/json" };
     const send = await handlers.messages.POST(new Request(
@@ -95,12 +100,52 @@ describe("chat routes", () => {
       body: "你好",
     });
 
+    const messageIds = [
+      "00000000-0000-4000-8000-000000000010",
+      "00000000-0000-4000-8000-000000000011",
+    ];
+    const validRead = await handlers.read.POST(new Request(
+      `http://test/api/conversations/${conversationId}/read?realm=teacher`,
+      { method: "POST", headers, body: JSON.stringify({ messageIds }) },
+    ), conversationId);
+    expect(validRead.status).toBe(200);
+    expect(chatService.markRead).toHaveBeenCalledWith(expect.objectContaining({ role: "teacher" }), conversationId, { messageIds });
+
+    chatService.markRead.mockClear();
     const invalidRead = await handlers.read.POST(new Request(
       `http://test/api/conversations/${conversationId}/read?realm=teacher`,
       { method: "POST", headers, body: JSON.stringify({ readAt: "client-time" }) },
     ), conversationId);
     expect(invalidRead.status).toBe(400);
     expect(chatService.markRead).not.toHaveBeenCalled();
+
+    for (const body of [
+      { messageIds: [] },
+      { messageIds: [messageIds[0], messageIds[0]] },
+      { messageIds: Array.from({ length: 101 }, () => messageIds[0]) },
+      { messageIds: messageIds, senderAccountId: actor.id },
+    ]) {
+      const response = await handlers.read.POST(new Request(
+        `http://test/api/conversations/${conversationId}/read?realm=teacher`,
+        { method: "POST", headers, body: JSON.stringify(body) },
+      ), conversationId);
+      expect(response.status).toBe(400);
+    }
+
+    const blocked = await handlers.block.POST(new Request(
+      `http://test/api/conversations/${conversationId}/block?realm=teacher`,
+      { method: "POST", headers, body: JSON.stringify({ reason: "  不希望继续沟通  " }) },
+    ), conversationId);
+    expect(blocked.status).toBe(200);
+    expect(chatService.blockConversation).toHaveBeenCalledWith(expect.objectContaining({ role: "teacher" }), conversationId, {
+      reason: "不希望继续沟通",
+    });
+
+    const invalidBlock = await handlers.block.POST(new Request(
+      `http://test/api/conversations/${conversationId}/block?realm=teacher`,
+      { method: "POST", headers, body: JSON.stringify({ reason: "x", blockedAccountId: actor.id }) },
+    ), conversationId);
+    expect(invalidBlock.status).toBe(400);
 
     const body = new ReadableStream<Uint8Array>({
       start(controller) { controller.enqueue(new TextEncoder().encode(`{"body":"${"x".repeat(17_000)}`)); },
@@ -112,6 +157,16 @@ describe("chat routes", () => {
       duplex: "half",
     } as RequestInit & { duplex: "half" });
     expect((await handlers.messages.POST(oversized, conversationId)).status).toBe(413);
+
+    const oversizedBlock = new Request(`http://test/api/conversations/${conversationId}/block?realm=teacher`, {
+      method: "POST",
+      headers,
+      body: new ReadableStream<Uint8Array>({
+        start(controller) { controller.enqueue(new TextEncoder().encode(`{"reason":"${"x".repeat(17_000)}`)); },
+      }),
+      duplex: "half",
+    } as RequestInit & { duplex: "half" });
+    expect((await handlers.block.POST(oversizedBlock, conversationId)).status).toBe(413);
   });
 
   it("maps authentication and chat workflow errors to stable HTTP statuses", async () => {

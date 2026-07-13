@@ -7,17 +7,32 @@ import type { AuthenticatedAccount } from "@/features/auth/service";
 import { lockAccountPair } from "@/features/interactions/account-pair-lock";
 
 import {
+  blockConversationSchema,
   conversationListQuerySchema,
   decodeConversationCursor,
+  decodeMessageChangeCursor,
   decodeMessageCursor,
   encodeConversationCursor,
+  encodeMessageChangeCursor,
   encodeMessageCursor,
+  markReadSchema,
   messageListQuerySchema,
   sendMessageSchema,
+  type BlockConversationInput,
   type ConversationListQuery,
+  type MarkReadInput,
   type MessageListQuery,
   type SendMessageInput,
 } from "./schema";
+import {
+  queryConversationContext,
+  safeMessageSelect,
+  toMessageDto,
+  type ChatMessageDto,
+  type ConversationContext,
+} from "./data";
+
+export type { ChatMessageDto } from "./data";
 
 type Actor = Pick<AuthenticatedAccount, "id" | "role">;
 type Db = PrismaClient | Prisma.TransactionClient;
@@ -31,15 +46,6 @@ export class ChatWorkflowError extends Error {
   }
 }
 
-export type ChatMessageDto = {
-  id: string;
-  clientMessageId: string;
-  body: string;
-  sentAt: string;
-  readAt: string | null;
-  mine: boolean;
-};
-
 export type ConversationListItemDto = {
   id: string;
   counterpart: { role: "teacher" | "parent"; displayName: string };
@@ -47,9 +53,12 @@ export type ConversationListItemDto = {
   activityAt: string;
   lastMessageAt: string | null;
   unreadCount: number;
+  blocked: boolean;
 };
 
 const uuidSchema = z.string().uuid();
+const nilUuid = "00000000-0000-0000-0000-000000000000";
+const epochMessageCursor = encodeMessageCursor({ sentAt: new Date(0), id: nilUuid });
 
 function expectedDatabaseRole(role: Actor["role"]) {
   if (role === "teacher") return "TEACHER" as const;
@@ -66,47 +75,14 @@ async function assertActiveActor(client: Db, actor: Actor) {
   if (!account) throw new ChatWorkflowError("UNAUTHORIZED", "登录状态无效");
 }
 
-async function loadConversation(client: Db, actor: Actor, conversationId: string) {
-  const conversation = await client.conversation.findUnique({ where: { id: conversationId } });
+async function loadConversation(client: Db, actor: Actor, conversationId: string): Promise<ConversationContext> {
+  const conversation = await queryConversationContext(client, conversationId);
   if (!conversation) throw new ChatWorkflowError("NOT_FOUND", "会话不存在");
   if (conversation.teacherId !== actor.id && conversation.parentId !== actor.id) {
     throw new ChatWorkflowError("FORBIDDEN", "你不是该会话成员");
   }
-  const greeting = await client.greeting.findUnique({
-    where: { id: conversation.greetingId },
-    select: { status: true, senderAccountId: true, recipientAccountId: true, tutoringRequestId: true },
-  });
-  const request = await client.tutoringRequest.findUnique({
-    where: { id: conversation.tutoringRequestId },
-    select: { id: true, title: true, parentProfileId: true },
-  });
-  const parentProfile = request
-    ? await client.parentProfile.findUnique({ where: { id: request.parentProfileId }, select: { accountId: true, displayName: true } })
-    : null;
-  const teacher = await client.account.findUnique({ where: { id: conversation.teacherId }, select: { id: true, role: true } });
-  const parent = await client.account.findUnique({ where: { id: conversation.parentId }, select: { id: true, role: true } });
-  const teacherProfile = await client.teacherProfile.findUnique({ where: { accountId: conversation.teacherId }, select: { displayName: true } });
-  if (!greeting || !request || !parentProfile || !teacher || !parent || !teacherProfile) {
-    throw new ChatWorkflowError("NOT_FOUND", "会话关系无效");
-  }
-  const greetingPair = [greeting.senderAccountId, greeting.recipientAccountId].sort();
-  const conversationPair = [conversation.teacherId, conversation.parentId].sort();
-  const valid = greeting.status === "ACCEPTED"
-    && teacher.role === "TEACHER"
-    && parent.role === "PARENT"
-    && greeting.tutoringRequestId === conversation.tutoringRequestId
-    && request.id === conversation.tutoringRequestId
-    && parentProfile.accountId === conversation.parentId
-    && greetingPair[0] === conversationPair[0]
-    && greetingPair[1] === conversationPair[1];
-  if (!valid) throw new ChatWorkflowError("NOT_FOUND", "会话关系无效");
-  return {
-    ...conversation,
-    greeting,
-    tutoringRequest: { ...request, parentProfile },
-    teacher: { ...teacher, teacherProfile },
-    parent: { ...parent, parentProfile },
-  };
+  if (!conversation.contextValid) throw new ChatWorkflowError("NOT_FOUND", "会话关系无效");
+  return conversation;
 }
 
 async function hasBlock(client: Db, teacherId: string, parentId: string) {
@@ -116,23 +92,13 @@ async function hasBlock(client: Db, teacherId: string, parentId: string) {
   ] } })) > 0;
 }
 
-function toMessageDto(row: {
-  id: string;
-  clientMessageId: string;
-  body: string;
-  senderAccountId: string;
-  sentAt: Date;
-  readAt: Date | null;
-  deletedAt: Date | null;
-}, actorId: string): ChatMessageDto {
-  return {
-    id: row.id,
-    clientMessageId: row.clientMessageId,
-    body: row.deletedAt ? "消息已删除" : row.body,
-    sentAt: row.sentAt.toISOString(),
-    readAt: row.readAt?.toISOString() ?? null,
-    mine: row.senderAccountId === actorId,
-  };
+function assertUnchangedPair(
+  conversation: ConversationContext,
+  preliminary: { teacherId: string; parentId: string },
+) {
+  if (conversation.teacherId !== preliminary.teacherId || conversation.parentId !== preliminary.parentId) {
+    throw new ChatWorkflowError("CONFLICT", "会话成员已发生变化，请重试");
+  }
 }
 
 type ConversationListRow = {
@@ -143,7 +109,80 @@ type ConversationListRow = {
   activityAt: Date;
   lastMessageAt: Date | null;
   unreadCount: number;
+  blocked: boolean;
 };
+
+async function queryMessagePage(
+  client: Db,
+  actor: Actor,
+  conversationId: string,
+  query: MessageListQuery,
+  initialChangesCursor: string | null = null,
+) {
+  if (query.changesAfter) {
+    const cursor = decodeMessageChangeCursor(query.changesAfter);
+    const rows = await client.message.findMany({
+      where: {
+        conversationId,
+        OR: [
+          { updatedAt: { gt: cursor.updatedAt } },
+          { updatedAt: cursor.updatedAt, id: { gt: cursor.id } },
+        ],
+      },
+      select: safeMessageSelect,
+      orderBy: [{ updatedAt: "asc" }, { id: "asc" }],
+      take: query.limit + 1,
+    });
+    const hasMore = rows.length > query.limit;
+    const selected = hasMore ? rows.slice(0, query.limit) : rows;
+    const last = selected.at(-1);
+    return {
+      items: selected.map((row) => toMessageDto(row, actor.id)),
+      limit: query.limit,
+      nextBeforeCursor: null,
+      nextAfterCursor: null,
+      nextChangesCursor: last
+        ? encodeMessageChangeCursor({ updatedAt: last.updatedAt, id: last.id })
+        : query.changesAfter,
+      hasMore,
+    };
+  }
+
+  const cursorValue = query.before ?? query.after;
+  const cursor = cursorValue ? decodeMessageCursor(cursorValue) : null;
+  const cursorWhere: Prisma.MessageWhereInput = !cursor ? {} : query.after ? { OR: [
+    { sentAt: { gt: cursor.sentAt } },
+    { sentAt: cursor.sentAt, id: { gt: cursor.id } },
+  ] } : { OR: [
+    { sentAt: { lt: cursor.sentAt } },
+    { sentAt: cursor.sentAt, id: { lt: cursor.id } },
+  ] };
+  const ascending = Boolean(query.after);
+  const rows = await client.message.findMany({
+    where: { conversationId, ...cursorWhere },
+    select: safeMessageSelect,
+    orderBy: [{ sentAt: ascending ? "asc" : "desc" }, { id: ascending ? "asc" : "desc" }],
+    take: query.limit + 1,
+  });
+  const hasMore = rows.length > query.limit;
+  const selected = hasMore ? rows.slice(0, query.limit) : rows;
+  const chronological = ascending ? selected : selected.toReversed();
+  const first = chronological[0];
+  const last = chronological.at(-1);
+  const emptyAfterCursor = query.after ?? (!query.before ? epochMessageCursor : null);
+  return {
+    items: chronological.map((row) => toMessageDto(row, actor.id)),
+    limit: query.limit,
+    nextBeforeCursor: !ascending && hasMore && first
+      ? encodeMessageCursor({ sentAt: first.sentAt, id: first.id })
+      : null,
+    nextAfterCursor: last
+      ? encodeMessageCursor({ sentAt: last.sentAt, id: last.id })
+      : emptyAfterCursor,
+    nextChangesCursor: initialChangesCursor,
+    hasMore,
+  };
+}
 
 export function createChatService(prisma: PrismaClient, now: () => Date = () => new Date()) {
   return {
@@ -181,7 +220,13 @@ export function createChatService(prisma: PrismaClient, now: () => Date = () => 
             WHERE message."conversationId" = conversation."id"
               AND message."senderAccountId" <> ${actor.id}::uuid
               AND message."readAt" IS NULL
-          ) AS "unreadCount"
+          ) AS "unreadCount",
+          EXISTS (
+            SELECT 1
+            FROM "Block" AS block
+            WHERE (block."blockerAccountId" = conversation."teacherId" AND block."blockedAccountId" = conversation."parentId")
+               OR (block."blockerAccountId" = conversation."parentId" AND block."blockedAccountId" = conversation."teacherId")
+          ) AS "blocked"
         FROM "Conversation" AS conversation
         JOIN "Greeting" AS greeting ON greeting."id" = conversation."greetingId"
         JOIN "TutoringRequest" AS request
@@ -218,6 +263,7 @@ export function createChatService(prisma: PrismaClient, now: () => Date = () => 
           activityAt: row.activityAt.toISOString(),
           lastMessageAt: row.lastMessageAt?.toISOString() ?? null,
           unreadCount: Number(row.unreadCount),
+          blocked: row.blocked,
         })),
         limit: query.limit,
         nextCursor: boundary ? encodeConversationCursor({ activityAt: boundary.activityAt, id: boundary.id }) : null,
@@ -227,52 +273,27 @@ export function createChatService(prisma: PrismaClient, now: () => Date = () => 
     async listMessages(actor: Actor, conversationIdValue: string, rawQuery: MessageListQuery | unknown) {
       const conversationId = uuidSchema.parse(conversationIdValue);
       const query = messageListQuerySchema.parse(rawQuery);
-      await assertActiveActor(prisma, actor);
-      await loadConversation(prisma, actor, conversationId);
-      const cursorValue = query.before ?? query.after;
-      const cursor = cursorValue ? decodeMessageCursor(cursorValue) : null;
-      const initialPollingWatermark = !query.before && !query.after
-        ? encodeMessageCursor({ sentAt: now(), id: "00000000-0000-0000-0000-000000000000" })
-        : null;
-      const cursorWhere: Prisma.MessageWhereInput = !cursor ? {} : query.after ? { OR: [
-        { sentAt: { gt: cursor.sentAt } },
-        { sentAt: cursor.sentAt, id: { gt: cursor.id } },
-      ] } : { OR: [
-        { sentAt: { lt: cursor.sentAt } },
-        { sentAt: cursor.sentAt, id: { lt: cursor.id } },
-      ] };
-      const ascending = Boolean(query.after);
-      const rows = await prisma.message.findMany({
-        where: { conversationId, ...cursorWhere },
-        select: {
-          id: true,
-          clientMessageId: true,
-          body: true,
-          senderAccountId: true,
-          sentAt: true,
-          readAt: true,
-          deletedAt: true,
-        },
-        orderBy: [{ sentAt: ascending ? "asc" : "desc" }, { id: ascending ? "asc" : "desc" }],
-        take: query.limit + 1,
+      expectedDatabaseRole(actor.role);
+      const initialHistory = !query.before && !query.after && !query.changesAfter;
+      if (!initialHistory) {
+        await assertActiveActor(prisma, actor);
+        await loadConversation(prisma, actor, conversationId);
+        return queryMessagePage(prisma, actor, conversationId, query);
+      }
+
+      const preliminary = await prisma.conversation.findUnique({
+        where: { id: conversationId },
+        select: { teacherId: true, parentId: true },
       });
-      const hasMore = rows.length > query.limit;
-      const selected = hasMore ? rows.slice(0, query.limit) : rows;
-      const chronological = ascending ? selected : selected.toReversed();
-      const first = chronological[0];
-      const last = chronological.at(-1);
-      const emptyAfterCursor = query.after ?? initialPollingWatermark;
-      return {
-        items: chronological.map((row) => toMessageDto(row, actor.id)),
-        limit: query.limit,
-        nextBeforeCursor: !ascending && hasMore && first
-          ? encodeMessageCursor({ sentAt: first.sentAt, id: first.id })
-          : null,
-        nextAfterCursor: last
-          ? encodeMessageCursor({ sentAt: last.sentAt, id: last.id })
-          : emptyAfterCursor,
-        hasMore,
-      };
+      if (!preliminary) throw new ChatWorkflowError("NOT_FOUND", "会话不存在");
+      return prisma.$transaction(async (transaction) => {
+        await lockAccountPair(transaction, preliminary.teacherId, preliminary.parentId);
+        await assertActiveActor(transaction, actor);
+        const conversation = await loadConversation(transaction, actor, conversationId);
+        assertUnchangedPair(conversation, preliminary);
+        const nextChangesCursor = encodeMessageChangeCursor({ updatedAt: now(), id: nilUuid });
+        return queryMessagePage(transaction, actor, conversationId, query, nextChangesCursor);
+      }, { isolationLevel: "ReadCommitted" });
     },
 
     async sendMessage(actor: Actor, conversationIdValue: string, rawInput: SendMessageInput | unknown) {
@@ -288,20 +309,10 @@ export function createChatService(prisma: PrismaClient, now: () => Date = () => 
         await lockAccountPair(transaction, preliminary.teacherId, preliminary.parentId);
         await assertActiveActor(transaction, actor);
         const conversation = await loadConversation(transaction, actor, conversationId);
-        if (conversation.teacherId !== preliminary.teacherId || conversation.parentId !== preliminary.parentId) {
-          throw new ChatWorkflowError("CONFLICT", "会话成员已发生变化，请重试");
-        }
+        assertUnchangedPair(conversation, preliminary);
         const existing = await transaction.message.findUnique({
           where: { conversationId_clientMessageId: { conversationId, clientMessageId: input.clientMessageId } },
-          select: {
-            id: true,
-            clientMessageId: true,
-            body: true,
-            senderAccountId: true,
-            sentAt: true,
-            readAt: true,
-            deletedAt: true,
-          },
+          select: safeMessageSelect,
         });
         if (existing) {
           if (existing.senderAccountId !== actor.id || existing.body !== input.body) {
@@ -320,36 +331,66 @@ export function createChatService(prisma: PrismaClient, now: () => Date = () => 
             clientMessageId: input.clientMessageId,
             body: input.body,
             sentAt: at,
+            updatedAt: at,
           },
-          select: {
-            id: true,
-            clientMessageId: true,
-            body: true,
-            senderAccountId: true,
-            sentAt: true,
-            readAt: true,
-            deletedAt: true,
-          },
+          select: safeMessageSelect,
         });
         await transaction.conversation.update({ where: { id: conversationId }, data: { lastMessageAt: at } });
         return toMessageDto(created, actor.id);
       }, { isolationLevel: "ReadCommitted" });
     },
 
-    async markRead(actor: Actor, conversationIdValue: string) {
+    async markRead(actor: Actor, conversationIdValue: string, rawInput: MarkReadInput | unknown) {
       const conversationId = uuidSchema.parse(conversationIdValue);
-      await assertActiveActor(prisma, actor);
-      await loadConversation(prisma, actor, conversationId);
-      const at = now();
-      const result = await prisma.message.updateMany({
-        where: {
-          conversationId,
-          senderAccountId: { not: actor.id },
-          readAt: null,
-        },
-        data: { readAt: at },
+      const input = markReadSchema.parse(rawInput);
+      expectedDatabaseRole(actor.role);
+      const preliminary = await prisma.conversation.findUnique({
+        where: { id: conversationId },
+        select: { teacherId: true, parentId: true },
       });
-      return { readCount: result.count, readAt: at.toISOString() };
+      if (!preliminary) throw new ChatWorkflowError("NOT_FOUND", "会话不存在");
+      return prisma.$transaction(async (transaction) => {
+        await lockAccountPair(transaction, preliminary.teacherId, preliminary.parentId);
+        await assertActiveActor(transaction, actor);
+        const conversation = await loadConversation(transaction, actor, conversationId);
+        assertUnchangedPair(conversation, preliminary);
+        const at = now();
+        const result = await transaction.message.updateMany({
+          where: {
+            id: { in: input.messageIds },
+            conversationId,
+            senderAccountId: { not: actor.id },
+            readAt: null,
+          },
+          // Task 12 的 edit/delete 必须沿用同一 pair lock，并同样显式更新 updatedAt。
+          data: { readAt: at, updatedAt: at },
+        });
+        return { readCount: result.count, readAt: at.toISOString() };
+      }, { isolationLevel: "ReadCommitted" });
+    },
+
+    async blockConversation(actor: Actor, conversationIdValue: string, rawInput: BlockConversationInput | unknown) {
+      const conversationId = uuidSchema.parse(conversationIdValue);
+      const input = blockConversationSchema.parse(rawInput);
+      expectedDatabaseRole(actor.role);
+      const preliminary = await prisma.conversation.findUnique({
+        where: { id: conversationId },
+        select: { teacherId: true, parentId: true },
+      });
+      if (!preliminary) throw new ChatWorkflowError("NOT_FOUND", "会话不存在");
+      return prisma.$transaction(async (transaction) => {
+        await lockAccountPair(transaction, preliminary.teacherId, preliminary.parentId);
+        await assertActiveActor(transaction, actor);
+        const conversation = await loadConversation(transaction, actor, conversationId);
+        assertUnchangedPair(conversation, preliminary);
+        const counterpartId = actor.id === conversation.teacherId ? conversation.parentId : conversation.teacherId;
+        await transaction.block.upsert({
+          where: { blockerAccountId_blockedAccountId: { blockerAccountId: actor.id, blockedAccountId: counterpartId } },
+          create: { blockerAccountId: actor.id, blockedAccountId: counterpartId, reason: input.reason },
+          update: {},
+        });
+        return { blocked: true as const };
+      }, { isolationLevel: "ReadCommitted" });
     },
   };
 }

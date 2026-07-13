@@ -8,7 +8,7 @@ import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vites
 
 vi.mock("server-only", () => ({}));
 
-import { encodeMessageCursor } from "./schema";
+import { encodeMessageChangeCursor, encodeMessageCursor } from "./schema";
 import { createChatService } from "./service";
 import { lockAccountPair } from "@/features/interactions/account-pair-lock";
 
@@ -27,6 +27,19 @@ describe("chat service against PostgreSQL", () => {
   let requestId = "";
   let greetingId = "";
   let conversationId = "";
+
+  async function waitForAdvisoryWaiters(minimum: number) {
+    for (let attempt = 0; attempt < 100; attempt += 1) {
+      const rows = await prisma.$queryRaw<Array<{ count: number }>>`
+        SELECT count(*)::int AS count
+        FROM pg_locks
+        WHERE locktype = 'advisory' AND granted = false
+      `;
+      if (rows[0].count >= minimum) return;
+      await new Promise<void>((resolve) => setTimeout(resolve, 5));
+    }
+    throw new Error(`expected at least ${minimum} waiting advisory lock(s)`);
+  }
 
   async function createAccount(id: string, role: "TEACHER" | "PARENT", label: string) {
     await prisma.account.create({ data: {
@@ -116,6 +129,7 @@ describe("chat service against PostgreSQL", () => {
       counterpart: { role: "teacher", displayName: "林老师" },
       request: { id: requestId, title: "初二数学巩固" },
       unreadCount: 0,
+      blocked: false,
     })]);
     expect(teacherPage.items[0].counterpart).toEqual({ role: "parent", displayName: "陈家长" });
     const payload = JSON.stringify({ parentPage, teacherPage });
@@ -128,6 +142,20 @@ describe("chat service against PostgreSQL", () => {
     await expect(service.listConversations({ id: parent.id, role: "teacher" }, {})).rejects.toMatchObject({ code: "UNAUTHORIZED" });
     await prisma.account.update({ where: { id: parent.id }, data: { status: "DISABLED" } });
     await expect(service.listConversations(parent, {})).rejects.toMatchObject({ code: "UNAUTHORIZED" });
+  });
+
+  it("blocks the counterpart through the conversation entry point idempotently and exposes blocked in the safe DTO", async () => {
+    await expect(service.blockConversation(parent, conversationId, { reason: "不希望继续沟通" }))
+      .resolves.toEqual({ blocked: true });
+    await expect(service.blockConversation(parent, conversationId, { reason: "不希望继续沟通" }))
+      .resolves.toEqual({ blocked: true });
+
+    await expect(prisma.block.count({ where: {
+      blockerAccountId: parent.id,
+      blockedAccountId: teacher.id,
+    } })).resolves.toBe(1);
+    expect((await service.listConversations(parent, {})).items[0].blocked).toBe(true);
+    await expect(service.listMessages(parent, conversationId, {})).resolves.toMatchObject({ items: [] });
   });
 
   it("sends from the authenticated actor, trims safely, updates activity, and enforces exact idempotency", async () => {
@@ -200,18 +228,19 @@ describe("chat service against PostgreSQL", () => {
     });
   });
 
-  it("serializes send behind the canonical pair lock and observes a concurrently committed block", async () => {
-    let announceBlocked!: () => void;
-    let releaseBlock!: () => void;
-    const blocked = new Promise<void>((resolve) => { announceBlocked = resolve; });
-    const release = new Promise<void>((resolve) => { releaseBlock = resolve; });
-    const blocker = prisma.$transaction(async (transaction) => {
+  it("serializes product block and send services behind the same canonical pair lock", async () => {
+    let announceLocked!: () => void;
+    let releaseLock!: () => void;
+    const locked = new Promise<void>((resolve) => { announceLocked = resolve; });
+    const release = new Promise<void>((resolve) => { releaseLock = resolve; });
+    const outerLock = prisma.$transaction(async (transaction) => {
       await lockAccountPair(transaction, teacher.id, parent.id);
-      await transaction.block.create({ data: { blockerAccountId: parent.id, blockedAccountId: teacher.id } });
-      announceBlocked();
+      announceLocked();
       await release;
     });
-    await blocked;
+    await locked;
+    const block = service.blockConversation(parent, conversationId, { reason: "停止往来" });
+    await waitForAdvisoryWaiters(1);
     let settled = false;
     const send = service.sendMessage(teacher, conversationId, {
       clientMessageId: crypto.randomUUID(),
@@ -220,8 +249,9 @@ describe("chat service against PostgreSQL", () => {
     await new Promise<void>((resolve) => setImmediate(resolve));
     expect(settled).toBe(false);
 
-    releaseBlock();
-    await blocker;
+    releaseLock();
+    await outerLock;
+    await expect(block).resolves.toEqual({ blocked: true });
     await expect(send).rejects.toMatchObject({ code: "BLOCKED" });
     await expect(prisma.message.count({ where: { conversationId } })).resolves.toBe(0);
   });
@@ -258,61 +288,69 @@ describe("chat service against PostgreSQL", () => {
     const page = await service.listMessages(parent, conversationId, {});
     expect(page.items).toEqual([]);
     expect(page.nextAfterCursor).toBe(encodeMessageCursor({
-      sentAt: fixedNow,
+      sentAt: new Date(0),
+      id: "00000000-0000-0000-0000-000000000000",
+    }));
+    expect(page.nextChangesCursor).toBe(encodeMessageChangeCursor({
+      updatedAt: fixedNow,
       id: "00000000-0000-0000-0000-000000000000",
     }));
   });
 
-  it("does not lose a message committed after the empty history query", async () => {
-    const watermarkAt = new Date("2026-07-13T12:00:00.000Z");
+  it("does not lose an earlier-sent message whose real transaction commits after the empty history query", async () => {
     const tooEarlyAt = new Date("2026-07-13T11:59:59.000Z");
-    let capturedWatermark: Date | null = null;
     let insertedId = "";
-    const queryHookPrisma = {
-      account: prisma.account,
-      conversation: prisma.conversation,
-      greeting: prisma.greeting,
-      tutoringRequest: prisma.tutoringRequest,
-      parentProfile: prisma.parentProfile,
-      teacherProfile: prisma.teacherProfile,
-      message: {
-        findMany: async (args: Parameters<typeof prisma.message.findMany>[0]) => {
-          const rows = await prisma.message.findMany(args);
-          const inserted = await prisma.message.create({ data: {
-            conversationId,
-            senderAccountId: teacher.id,
-            clientMessageId: crypto.randomUUID(),
-            body: "查询后提交的消息",
-            sentAt: capturedWatermark ?? tooEarlyAt,
-          } });
-          insertedId = inserted.id;
-          return rows;
-        },
-      },
-    } as unknown as PrismaClient;
-    const hookedService = createChatService(queryHookPrisma, () => {
-      capturedWatermark = watermarkAt;
-      return watermarkAt;
+    let announceInserted!: () => void;
+    let releaseCommit!: () => void;
+    const inserted = new Promise<void>((resolve) => { announceInserted = resolve; });
+    const commit = new Promise<void>((resolve) => { releaseCommit = resolve; });
+    const writer = prisma.$transaction(async (transaction) => {
+      const message = await transaction.message.create({ data: {
+             conversationId,
+             senderAccountId: teacher.id,
+             clientMessageId: crypto.randomUUID(),
+             body: "查询后提交的消息",
+        sentAt: tooEarlyAt,
+      } });
+      insertedId = message.id;
+      announceInserted();
+      await commit;
     });
-
-    const initial = await hookedService.listMessages(parent, conversationId, {});
-    expect(initial.items).toEqual([]);
-    const polled = await service.listMessages(parent, conversationId, { after: initial.nextAfterCursor! });
-
-    expect(polled.items.map(({ id }) => id)).toContain(insertedId);
+    await inserted;
+    try {
+      const initial = await service.listMessages(parent, conversationId, {});
+      expect(initial.items).toEqual([]);
+      expect(initial.nextAfterCursor).toBe(encodeMessageCursor({
+        sentAt: new Date(0),
+        id: "00000000-0000-0000-0000-000000000000",
+      }));
+      releaseCommit();
+      await writer;
+      const polled = await service.listMessages(parent, conversationId, { after: initial.nextAfterCursor! });
+      expect(polled.items.map(({ id }) => id)).toContain(insertedId);
+    } finally {
+      releaseCommit();
+      await writer.catch(() => undefined);
+    }
   });
 
-  it("counts only unread messages from the counterpart and marks only those with server time", async () => {
-    const teacherMessages = [];
-    for (const [index, body] of ["未读一", "未读二"].entries()) {
-      teacherMessages.push(await prisma.message.create({ data: {
+  it("marks only the presented counterpart ids with server time and leaves a concurrent unseen message unread", async () => {
+    const presented = await prisma.message.create({ data: {
         conversationId,
         senderAccountId: teacher.id,
         clientMessageId: crypto.randomUUID(),
-        body,
-        sentAt: new Date(`2026-07-13T10:0${index}:00.000Z`),
-      } }));
-    }
+        body: "已呈现消息",
+        sentAt: new Date("2026-07-13T10:00:00.000Z"),
+    } });
+    const initial = await service.listMessages(parent, conversationId, {});
+    expect(initial.items.map(({ id }) => id)).toEqual([presented.id]);
+    const unseen = await prisma.message.create({ data: {
+      conversationId,
+      senderAccountId: teacher.id,
+      clientMessageId: crypto.randomUUID(),
+      body: "尚未呈现的并发消息",
+      sentAt: new Date("2026-07-13T10:01:00.000Z"),
+    } });
     const own = await prisma.message.create({ data: {
       conversationId,
       senderAccountId: parent.id,
@@ -322,12 +360,75 @@ describe("chat service against PostgreSQL", () => {
     } });
 
     expect((await service.listConversations(parent, {})).items[0].unreadCount).toBe(2);
-    await expect(service.markRead(parent, conversationId)).resolves.toEqual({ readCount: 2, readAt: fixedNow.toISOString() });
-    for (const message of teacherMessages) {
-      await expect(prisma.message.findUniqueOrThrow({ where: { id: message.id } })).resolves.toMatchObject({ readAt: fixedNow });
-    }
+    await expect(service.markRead(parent, conversationId, { messageIds: [presented.id, own.id] }))
+      .resolves.toEqual({ readCount: 1, readAt: fixedNow.toISOString() });
+    await expect(prisma.message.findUniqueOrThrow({ where: { id: presented.id } })).resolves.toMatchObject({ readAt: fixedNow, updatedAt: fixedNow });
+    await expect(prisma.message.findUniqueOrThrow({ where: { id: unseen.id } })).resolves.toMatchObject({ readAt: null });
     await expect(prisma.message.findUniqueOrThrow({ where: { id: own.id } })).resolves.toMatchObject({ readAt: null });
-    expect((await service.listConversations(parent, {})).items[0].unreadCount).toBe(0);
+    expect((await service.listConversations(parent, {})).items[0].unreadCount).toBe(1);
+  });
+
+  it("polls full message DTO changes by updatedAt for new, read and deleted states with immediate continuation", async () => {
+    const nilId = "00000000-0000-0000-0000-000000000000";
+    let clock = new Date("2099-07-13T12:00:00.000Z");
+    const changeService = createChatService(prisma, () => clock);
+    const initial = await changeService.listMessages(teacher, conversationId, {});
+    expect(initial.nextChangesCursor).toBe(encodeMessageChangeCursor({ updatedAt: clock, id: nilId }));
+
+    clock = new Date("2099-07-13T12:00:01.000Z");
+    const incoming = await changeService.sendMessage(parent, conversationId, {
+      clientMessageId: crypto.randomUUID(),
+      body: "状态轮询消息",
+    });
+    const incomingAt = clock;
+    clock = new Date("2099-07-13T12:00:01.500Z");
+    const secondIncoming = await changeService.sendMessage(parent, conversationId, {
+      clientMessageId: crypto.randomUUID(),
+      body: "立即续拉消息",
+    });
+    const createdChanges = await changeService.listMessages(teacher, conversationId, {
+      changesAfter: initial.nextChangesCursor!,
+      limit: 1,
+    });
+    expect(createdChanges.items).toEqual([expect.objectContaining({
+      id: incoming.id,
+      body: "状态轮询消息",
+      readAt: null,
+      deletedAt: null,
+      updatedAt: incomingAt.toISOString(),
+      mine: false,
+    })]);
+    expect(createdChanges.hasMore).toBe(true);
+    expect(createdChanges.nextChangesCursor).toBe(encodeMessageChangeCursor({ updatedAt: incomingAt, id: incoming.id }));
+    const continuedChanges = await changeService.listMessages(teacher, conversationId, {
+      changesAfter: createdChanges.nextChangesCursor!,
+      limit: 1,
+    });
+    expect(continuedChanges.items.map(({ id }) => id)).toEqual([secondIncoming.id]);
+    expect(continuedChanges.hasMore).toBe(false);
+
+    clock = new Date("2099-07-13T12:00:02.000Z");
+    await changeService.markRead(teacher, conversationId, { messageIds: [incoming.id] });
+    const readChanges = await changeService.listMessages(parent, conversationId, {
+      changesAfter: continuedChanges.nextChangesCursor!,
+    });
+    expect(readChanges.items).toEqual([expect.objectContaining({ id: incoming.id, readAt: clock.toISOString(), mine: true })]);
+
+    clock = new Date("2099-07-13T12:00:03.000Z");
+    await prisma.$transaction(async (transaction) => {
+      // Task 12 的 edit/delete mutation 必须沿用相同 pair lock，并同步写 updatedAt。
+      await lockAccountPair(transaction, teacher.id, parent.id);
+      await transaction.message.update({ where: { id: incoming.id }, data: { deletedAt: clock, updatedAt: clock } });
+    });
+    const deletedChanges = await changeService.listMessages(parent, conversationId, {
+      changesAfter: readChanges.nextChangesCursor!,
+    });
+    expect(deletedChanges.items).toEqual([expect.objectContaining({
+      id: incoming.id,
+      body: "消息已删除",
+      deletedAt: clock.toISOString(),
+      updatedAt: clock.toISOString(),
+    })]);
   });
 
   it("rejects conversations whose accepted greeting or participant/request context no longer matches", async () => {

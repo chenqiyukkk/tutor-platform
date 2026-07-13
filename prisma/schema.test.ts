@@ -212,4 +212,28 @@ describe("chat polling indexes", () => {
     expect(sql).toContain('"Conversation_teacherId_activityAt_id_idx"');
     expect(sql).toContain('"Conversation_parentId_activityAt_id_idx"');
   });
+
+  it("adds a forward-only message change watermark and removes superseded conversation indexes", () => {
+    expect(schema).toMatch(/updatedAt\s+DateTime\s+@default\(now\(\)\)\s+@db\.Timestamptz\(3\)/);
+    expect(schema).toMatch(/@@index\(\[conversationId, updatedAt, id\]\)/);
+    expect(schema).not.toMatch(/@@index\(\[teacherId, lastMessageAt\]\)/);
+    expect(schema).not.toMatch(/@@index\(\[parentId, lastMessageAt\]\)/);
+
+    const changeMigration = readdirSync(migrationsDirectory, { withFileTypes: true }).find(
+      (entry) => entry.isDirectory() && entry.name === "20260713133700_chat_message_change_polling",
+    );
+    expect(changeMigration).toBeDefined();
+    if (!changeMigration) return;
+    const sql = readFileSync(join(migrationsDirectory, changeMigration.name, "migration.sql"), "utf8");
+    expect(sql.trimStart().startsWith("BEGIN;")).toBe(true);
+    expect(sql.trimEnd().endsWith("COMMIT;")).toBe(true);
+    expect(sql).toContain('ADD COLUMN "updatedAt" TIMESTAMPTZ(3)');
+    expect(sql).toMatch(/GREATEST\(\s*"sentAt"/u);
+    for (const column of ['"readAt"', '"editedAt"', '"deletedAt"']) expect(sql).toContain(column);
+    expect(sql).toContain('ALTER COLUMN "updatedAt" SET NOT NULL');
+    expect(sql).toContain('ALTER COLUMN "updatedAt" SET DEFAULT CURRENT_TIMESTAMP');
+    expect(sql).toContain('"Message_conversationId_updatedAt_id_idx"');
+    expect(sql).toContain('DROP INDEX IF EXISTS "Conversation_teacherId_lastMessageAt_idx"');
+    expect(sql).toContain('DROP INDEX IF EXISTS "Conversation_parentId_lastMessageAt_idx"');
+  });
 });

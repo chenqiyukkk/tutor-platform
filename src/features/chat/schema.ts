@@ -7,7 +7,7 @@ function encodeCursor(timestampKey: string, at: Date, id: string) {
   return Buffer.from(JSON.stringify({ [timestampKey]: at.toISOString(), id }), "utf8").toString("base64url");
 }
 
-function decodeCursor(value: string, timestampKey: "sentAt" | "activityAt") {
+function decodeCursor(value: string, timestampKey: "sentAt" | "updatedAt" | "activityAt") {
   if (value.length < 1 || value.length > 256 || !/^[A-Za-z0-9_-]+$/u.test(value)) throw new Error("invalid chat cursor");
   const decoded = Buffer.from(value, "base64url");
   if (decoded.toString("base64url") !== value) throw new Error("non-canonical chat cursor");
@@ -19,6 +19,7 @@ function decodeCursor(value: string, timestampKey: "sentAt" | "activityAt") {
 }
 
 export type MessageCursor = { sentAt: Date; id: string };
+export type MessageChangeCursor = { updatedAt: Date; id: string };
 export type ConversationCursor = { activityAt: Date; id: string };
 
 export function encodeMessageCursor(cursor: MessageCursor) {
@@ -28,6 +29,15 @@ export function encodeMessageCursor(cursor: MessageCursor) {
 export function decodeMessageCursor(value: string): MessageCursor {
   const decoded = decodeCursor(value, "sentAt");
   return { sentAt: decoded.at, id: decoded.id };
+}
+
+export function encodeMessageChangeCursor(cursor: MessageChangeCursor) {
+  return encodeCursor("updatedAt", cursor.updatedAt, cursor.id);
+}
+
+export function decodeMessageChangeCursor(value: string): MessageChangeCursor {
+  const decoded = decodeCursor(value, "updatedAt");
+  return { updatedAt: decoded.at, id: decoded.id };
 }
 
 export function encodeConversationCursor(cursor: ConversationCursor) {
@@ -52,12 +62,30 @@ export const sendMessageSchema = z.object({
   }),
 }).strict();
 
+export const markReadSchema = z.object({
+  messageIds: z.array(z.string().uuid()).min(1).max(100).refine(
+    (ids) => new Set(ids).size === ids.length,
+    "消息 ID 不能重复",
+  ),
+}).strict();
+
+export const blockConversationSchema = z.object({
+  reason: z.string().transform((value) => value.trim()).superRefine((value, context) => {
+    const length = Array.from(value).length;
+    if (length < 2) context.addIssue({ code: "custom", message: "屏蔽原因至少 2 个字符" });
+    if (length > 200) context.addIssue({ code: "custom", message: "屏蔽原因最多 200 个字符" });
+  }),
+}).strict();
+
 export const messageListQuerySchema = z.object({
   before: cursorString(decodeMessageCursor).optional(),
   after: cursorString(decodeMessageCursor).optional(),
+  changesAfter: cursorString(decodeMessageChangeCursor).optional(),
   limit: z.coerce.number().int().min(1).max(100).default(50),
 }).strict().superRefine((query, context) => {
-  if (query.before && query.after) context.addIssue({ code: "custom", message: "不能同时使用 before 与 after" });
+  if ([query.before, query.after, query.changesAfter].filter(Boolean).length > 1) {
+    context.addIssue({ code: "custom", message: "before、after 与 changesAfter 只能使用一个" });
+  }
 });
 
 export const conversationListQuerySchema = z.object({
@@ -66,5 +94,7 @@ export const conversationListQuerySchema = z.object({
 }).strict();
 
 export type SendMessageInput = z.infer<typeof sendMessageSchema>;
+export type MarkReadInput = z.infer<typeof markReadSchema>;
+export type BlockConversationInput = z.infer<typeof blockConversationSchema>;
 export type MessageListQuery = z.infer<typeof messageListQuerySchema>;
 export type ConversationListQuery = z.infer<typeof conversationListQuerySchema>;

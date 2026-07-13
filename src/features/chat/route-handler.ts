@@ -6,7 +6,13 @@ import { sessionCookieNames } from "@/features/auth/session";
 import { readUniqueCookieValue } from "@/features/directory/detail-auth";
 import { JsonBodyError, readLimitedJson } from "@/lib/json-body";
 
-import { conversationListQuerySchema, messageListQuerySchema, sendMessageSchema } from "./schema";
+import {
+  blockConversationSchema,
+  conversationListQuerySchema,
+  markReadSchema,
+  messageListQuerySchema,
+  sendMessageSchema,
+} from "./schema";
 import { ChatWorkflowError, type ChatService } from "./service";
 
 type Realm = "parent" | "teacher";
@@ -51,10 +57,9 @@ function errorResponse(error: unknown) {
 
 type Dependencies = {
   authenticate(role: Realm, token: string | undefined): Promise<AuthenticatedAccount>;
-  chatService: Pick<ChatService, "listConversations" | "listMessages" | "sendMessage" | "markRead">;
+  chatService: Pick<ChatService, "listConversations" | "listMessages" | "sendMessage" | "markRead" | "blockConversation">;
 };
 
-const readBodySchema = z.object({}).strict();
 const conversationIdSchema = z.string().uuid();
 
 export function createChatHandlers({ authenticate, chatService }: Dependencies) {
@@ -78,7 +83,7 @@ export function createChatHandlers({ authenticate, chatService }: Dependencies) 
     messages: {
       async GET(request: Request, rawId: string) {
         try {
-          const { account, params } = await caller(request, ["realm", "before", "after", "limit"]);
+          const { account, params } = await caller(request, ["realm", "before", "after", "changesAfter", "limit"]);
           const conversationId = conversationIdSchema.parse(rawId);
           const query = messageListQuerySchema.parse(Object.fromEntries([...params].filter(([key]) => key !== "realm")));
           return NextResponse.json(await chatService.listMessages(account, conversationId, query));
@@ -98,8 +103,18 @@ export function createChatHandlers({ authenticate, chatService }: Dependencies) 
         try {
           const { account } = await caller(request, ["realm"]);
           const conversationId = conversationIdSchema.parse(rawId);
-          readBodySchema.parse(await readLimitedJson(request));
-          return NextResponse.json(await chatService.markRead(account, conversationId));
+          const input = markReadSchema.parse(await readLimitedJson(request));
+          return NextResponse.json(await chatService.markRead(account, conversationId, input));
+        } catch (error) { return errorResponse(error); }
+      },
+    },
+    block: {
+      async POST(request: Request, rawId: string) {
+        try {
+          const { account } = await caller(request, ["realm"]);
+          const conversationId = conversationIdSchema.parse(rawId);
+          const input = blockConversationSchema.parse(await readLimitedJson(request));
+          return NextResponse.json(await chatService.blockConversation(account, conversationId, input));
         } catch (error) { return errorResponse(error); }
       },
     },

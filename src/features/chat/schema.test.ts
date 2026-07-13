@@ -1,11 +1,15 @@
 import { describe, expect, it } from "vitest";
 
 import {
+  blockConversationSchema,
   conversationListQuerySchema,
   decodeConversationCursor,
+  decodeMessageChangeCursor,
   decodeMessageCursor,
   encodeConversationCursor,
+  encodeMessageChangeCursor,
   encodeMessageCursor,
+  markReadSchema,
   messageListQuerySchema,
   sendMessageSchema,
 } from "./schema";
@@ -29,27 +33,59 @@ describe("chat message input", () => {
     expect(() => sendMessageSchema.parse({ clientMessageId: "client-1", body: "你好" })).toThrow();
     expect(() => sendMessageSchema.parse({ clientMessageId: id, body: "你好", senderId: id })).toThrow();
   });
+
+  it("accepts only unique visible message ids for read receipts", () => {
+    const secondId = "00000000-0000-4000-8000-000000000002";
+    expect(markReadSchema.parse({ messageIds: [id, secondId] })).toEqual({ messageIds: [id, secondId] });
+    for (const input of [
+      { messageIds: [] },
+      { messageIds: [id, id] },
+      { messageIds: ["not-a-uuid"] },
+      { messageIds: Array.from({ length: 101 }, (_, index) => `00000000-0000-4000-8000-${String(index + 1).padStart(12, "0")}`) },
+      { messageIds: [id], senderId: id },
+    ]) expect(() => markReadSchema.parse(input)).toThrow();
+  });
+
+  it("trims and bounds conversation block reasons without accepting client identity", () => {
+    expect(blockConversationSchema.parse({ reason: "  不希望继续沟通  " })).toEqual({ reason: "不希望继续沟通" });
+    expect(blockConversationSchema.parse({ reason: "🙂".repeat(200) }).reason).toBe("🙂".repeat(200));
+    for (const input of [
+      { reason: " " },
+      { reason: "a" },
+      { reason: "🙂".repeat(201) },
+      { reason: "不希望继续沟通", blockedAccountId: id },
+    ]) expect(() => blockConversationSchema.parse(input)).toThrow();
+  });
 });
 
 describe("chat keyset queries", () => {
   it("round-trips canonical message and conversation cursors", () => {
     const sentAt = new Date("2026-07-13T08:00:00.123Z");
+    const updatedAt = new Date("2026-07-13T08:30:00.234Z");
     const activityAt = new Date("2026-07-13T09:00:00.456Z");
     const messageCursor = encodeMessageCursor({ sentAt, id });
+    const changeCursor = encodeMessageChangeCursor({ updatedAt, id });
     const conversationCursor = encodeConversationCursor({ activityAt, id });
 
     expect(decodeMessageCursor(messageCursor)).toEqual({ sentAt, id });
+    expect(decodeMessageChangeCursor(changeCursor)).toEqual({ updatedAt, id });
     expect(decodeConversationCursor(conversationCursor)).toEqual({ activityAt, id });
     expect(messageListQuerySchema.parse({ before: messageCursor, limit: "100" })).toEqual({ before: messageCursor, limit: 100 });
     expect(messageListQuerySchema.parse({ after: messageCursor })).toEqual({ after: messageCursor, limit: 50 });
+    expect(messageListQuerySchema.parse({ changesAfter: changeCursor })).toEqual({ changesAfter: changeCursor, limit: 50 });
     expect(conversationListQuerySchema.parse({ cursor: conversationCursor, limit: "100" })).toEqual({ cursor: conversationCursor, limit: 100 });
   });
 
   it("rejects noncanonical cursors, mixed directions, offsets, unknown fields, and limits above 100", () => {
     const cursor = encodeMessageCursor({ sentAt: new Date("2026-07-13T08:00:00.123Z"), id });
+    const changes = encodeMessageChangeCursor({ updatedAt: new Date("2026-07-13T08:00:00.123Z"), id });
     for (const query of [
       { before: cursor, after: cursor },
+      { before: cursor, changesAfter: changes },
+      { after: cursor, changesAfter: changes },
+      { before: cursor, after: cursor, changesAfter: changes },
       { before: "not+base64" },
+      { changesAfter: cursor },
       { page: 2 },
       { ownerAccountId: id },
       { limit: 101 },
