@@ -10,6 +10,19 @@ CREATE SEQUENCE "Message_changeVersion_seq"
 ALTER TABLE "Message"
   ADD COLUMN "changeVersion" BIGINT;
 
+UPDATE "Message"
+SET "changeVersion" = nextval('"Message_changeVersion_seq"')
+WHERE "changeVersion" IS NULL;
+
+ALTER TABLE "Message"
+  ALTER COLUMN "changeVersion" SET NOT NULL,
+  ALTER COLUMN "changeVersion" SET DEFAULT 0;
+
+CREATE INDEX "Message_conversationId_changeVersion_idx"
+  ON "Message"("conversationId", "changeVersion");
+
+DROP INDEX "Message_conversationId_updatedAt_id_idx";
+
 CREATE FUNCTION "assign_message_change_version"()
 RETURNS trigger
 LANGUAGE plpgsql
@@ -48,17 +61,5 @@ CREATE TRIGGER "Message_assign_change_version"
 BEFORE INSERT OR UPDATE ON "Message"
 FOR EACH ROW
 EXECUTE FUNCTION "assign_message_change_version"();
-
-UPDATE "Message"
-SET "changeVersion" = 0;
-
-ALTER TABLE "Message"
-  ALTER COLUMN "changeVersion" SET NOT NULL,
-  ALTER COLUMN "changeVersion" SET DEFAULT 0;
-
-CREATE INDEX "Message_conversationId_changeVersion_idx"
-  ON "Message"("conversationId", "changeVersion");
-
-DROP INDEX "Message_conversationId_updatedAt_id_idx";
 
 COMMIT;

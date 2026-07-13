@@ -86,7 +86,6 @@ export function ChatWorkspace({ realm }: { realm: ChatRealm }) {
   const conversationGeneration = useRef(0);
   const conversationFirstPageCursor = useRef<string | null>(null);
   const conversationLoadedPageCount = useRef(1);
-  const conversationPaginationDirty = useRef(false);
   const conversationPaginationRevision = useRef(0);
   const conversationPageController = useRef<AbortController | null>(null);
   const threadGeneration = useRef(0);
@@ -108,7 +107,6 @@ export function ChatWorkspace({ realm }: { realm: ChatRealm }) {
     const generation = ++conversationGeneration.current;
     conversationPageController.current?.abort();
     conversationLoadedPageCount.current = 1;
-    conversationPaginationDirty.current = false;
     conversationPaginationRevision.current += 1;
     const controller = new AbortController();
     void fetch(`/api/conversations?realm=${realm}&limit=100`, {
@@ -151,7 +149,6 @@ export function ChatWorkspace({ realm }: { realm: ChatRealm }) {
     if (conversationLoadedPageCount.current === 1) {
       setConversationNextCursor(page.nextCursor);
     } else if (boundaryChanged) {
-      conversationPaginationDirty.current = true;
       conversationPaginationRevision.current += 1;
       setConversationNextCursor(page.nextCursor);
     }
@@ -320,7 +317,8 @@ export function ChatWorkspace({ realm }: { realm: ChatRealm }) {
     const cursor = conversationNextCursor;
     const generation = conversationGeneration.current;
     const revision = conversationPaginationRevision.current;
-    const rebuild = conversationPaginationDirty.current;
+    // Deep-page membership can change even when page 1 and its boundary cursor are identical.
+    const rebuild = conversationLoadedPageCount.current > 1;
     const targetPageCount = conversationLoadedPageCount.current + 1;
     const controller = new AbortController();
     conversationPageController.current?.abort();
@@ -345,8 +343,9 @@ export function ChatWorkspace({ realm }: { realm: ChatRealm }) {
         generation !== conversationGeneration.current
         || revision !== conversationPaginationRevision.current
       ) return;
+      // This count and next cursor describe only the freshly traversed chain. The ID merge
+      // intentionally preserves known conversations and the current selection.
       conversationLoadedPageCount.current = loadedPageCount;
-      conversationPaginationDirty.current = false;
       setConversations((current) => mergeConversations(current, incoming));
       setConversationNextCursor(nextCursor);
     } catch (error) {

@@ -241,6 +241,55 @@ describe("ChatWorkspace", () => {
     expect(screen.getByRole("button", { name: /第201位家长/ })).toBeInTheDocument();
   });
 
+  it("rebuilds deep pages even when first-page items and boundary are unchanged", async () => {
+    vi.useFakeTimers();
+    vi.spyOn(document, "visibilityState", "get").mockReturnValue("visible");
+    const oldSecondPageItem = numberedConversation(101);
+    const movedFromRank250To150 = {
+      ...numberedConversation(150),
+      activityAt: "2026-07-13T11:30:00.000Z",
+    };
+    const refreshedThirdPageItem = numberedConversation(201);
+    let firstPageCalls = 0;
+    let firstContinuationCalls = 0;
+    const requestedCursors: string[] = [];
+    const fetchMock = vi.fn<(input: RequestInfo | URL) => Promise<Response>>(async (input) => {
+      const url = String(input);
+      if (url === "/api/conversations?realm=teacher&limit=100") {
+        firstPageCalls += 1;
+        return conversationsResponse([conversationA], "c1");
+      }
+      const cursor = new URL(url, "http://test").searchParams.get("cursor");
+      if (cursor) requestedCursors.push(cursor);
+      if (cursor === "c1") {
+        firstContinuationCalls += 1;
+        return firstContinuationCalls === 1
+          ? conversationsResponse([oldSecondPageItem], "c2")
+          : conversationsResponse([movedFromRank250To150], "c3");
+      }
+      if (cursor === "c3") return conversationsResponse([refreshedThirdPageItem]);
+      if (cursor === "c2") return conversationsResponse([]);
+      if (url.includes("/messages?")) return messagesResponse([]);
+      return Response.json({ readCount: 0, readAt: "2026-07-13T12:01:00.000Z" });
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    render(<ChatWorkspace realm="teacher" />);
+    await act(async () => { for (let pass = 0; pass < 6; pass += 1) await Promise.resolve(); });
+    fireEvent.click(screen.getByRole("button", { name: "加载更多会话" }));
+    await act(async () => { for (let pass = 0; pass < 4; pass += 1) await Promise.resolve(); });
+    expect(screen.getByRole("button", { name: /第101位家长/ })).toBeInTheDocument();
+
+    await act(async () => { await vi.advanceTimersByTimeAsync(2_000); });
+    expect(firstPageCalls).toBe(2);
+    fireEvent.click(screen.getByRole("button", { name: "加载更多会话" }));
+    await act(async () => { for (let pass = 0; pass < 8; pass += 1) await Promise.resolve(); });
+
+    expect(requestedCursors).toEqual(["c1", "c1", "c3"]);
+    expect(screen.getByRole("button", { name: /第150位家长/ })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /第201位家长/ })).toBeInTheDocument();
+  });
+
   it("aborts and ignores a stale conversation page when the realm changes", async () => {
     const stalePage = deferred<Response>();
     const staleConversation = numberedConversation(102);
@@ -673,8 +722,8 @@ describe("ChatWorkspace", () => {
     fireEvent.change(input, { target: { value: "  我来讲解  " } });
     fireEvent.click(screen.getByRole("button", { name: "发送消息" }));
 
-    expect(await screen.findByText("我来讲解")).toBeInTheDocument();
-    expect(screen.getByText("发送中…")).toBeInTheDocument();
+    expect(await screen.findByText("发送中…")).toBeInTheDocument();
+    expect(screen.getByText("我来讲解")).toBeInTheDocument();
     expect(sentPayload).toEqual({ clientMessageId: "40000000-0000-4000-8000-000000000001", body: "我来讲解" });
     post.resolve(Response.json({ message: message({
       id: "50000000-0000-4000-8000-000000000001",

@@ -445,6 +445,102 @@ describe("greeting workflow migration upgrades", () => {
     }
   }, 60_000);
 
+  it("does not deadlock an app pair-lock holder behind the Message migration lock", async () => {
+    const database = await createDatabase();
+    const root = createMigrationWorkspace(7);
+    const seedClient = new Client({ connectionString: database.url });
+    const writer = new Client({ connectionString: database.url });
+    const migrator = new Client({ connectionString: database.url });
+    const observer = new Client({ connectionString: database.url });
+    let migration: Promise<unknown> | undefined;
+    let write: Promise<unknown> | undefined;
+    try {
+      expectPrismaSuccess(runPrisma(root, database.url, ["migrate", "deploy"]));
+      await seedClient.connect();
+      const seed = await seedLegacy(seedClient);
+      const legacyMessageId = randomUUID();
+      const insertedMessageId = randomUUID();
+      await seedClient.query(`
+        INSERT INTO "Message" ("id","conversationId","senderAccountId","clientMessageId","body","sentAt")
+        VALUES ($1,$2,$3,$4,'Legacy before 13800',$5)
+      `, [legacyMessageId, seed.conversationId, seed.teacherId, randomUUID(), new Date("2026-07-01T12:01:00.000Z")]);
+      copyMigrations(root, 16);
+      expectPrismaSuccess(runPrisma(root, database.url, ["migrate", "deploy"]));
+      await Promise.all([writer.connect(), migrator.connect(), observer.connect()]);
+
+      await writer.query("BEGIN");
+      const pairKey = `greeting-pair:${[seed.teacherId, seed.parentId].sort().join(":")}`;
+      await writer.query(`SELECT pg_advisory_xact_lock(hashtextextended($1, 0))`, [pairKey]);
+
+      const migrationSql = readFileSync(
+        join(process.cwd(), "prisma", "migrations", "20260713133800_chat_message_change_version", "migration.sql"),
+        "utf8",
+      );
+      const addColumn = `ALTER TABLE "Message"
+  ADD COLUMN "changeVersion" BIGINT;`;
+      expect(migrationSql).toContain(addColumn);
+      const orchestratedSql = migrationSql.replace(addColumn, `${addColumn}\n\nSELECT pg_sleep(0.5);`);
+      const migratorPid = Number((await migrator.query(`SELECT pg_backend_pid() AS pid`)).rows[0].pid);
+      migration = migrator.query(orchestratedSql);
+
+      let acquiredMessageLock = false;
+      for (let attempt = 0; attempt < 100; attempt += 1) {
+        const lock = await observer.query<{ count: number }>(`
+          SELECT count(*)::int AS count
+          FROM pg_locks
+          WHERE pid = $1
+            AND relation = '"Message"'::regclass
+            AND mode = 'AccessExclusiveLock'
+            AND granted = true
+        `, [migratorPid]);
+        acquiredMessageLock = lock.rows[0].count > 0;
+        if (acquiredMessageLock) break;
+        await delay(5);
+      }
+      expect(acquiredMessageLock).toBe(true);
+
+      write = writer.query(`
+        INSERT INTO "Message" ("id","conversationId","senderAccountId","clientMessageId","body","sentAt")
+        VALUES ($1,$2,$3,$4,'App write during 13800',$5)
+      `, [insertedMessageId, seed.conversationId, seed.teacherId, randomUUID(), new Date("2026-07-01T12:02:00.000Z")]);
+      const outcomes = await Promise.allSettled([migration, write]);
+      expect(outcomes.map((outcome) => outcome.status === "fulfilled"
+        ? { status: outcome.status }
+        : {
+            status: outcome.status,
+            code: (outcome.reason as { code?: string }).code,
+          })).toEqual([{ status: "fulfilled" }, { status: "fulfilled" }]);
+      await writer.query("COMMIT");
+
+      const versions = await observer.query<{ id: string; changeVersion: string }>(`
+        SELECT "id", "changeVersion"
+        FROM "Message"
+        WHERE "id" = ANY($1::uuid[])
+      `, [[legacyMessageId, insertedMessageId]]);
+      const byId = new Map(versions.rows.map((row) => [row.id, BigInt(row.changeVersion)]));
+      expect(byId.get(insertedMessageId)).toBeGreaterThan(byId.get(legacyMessageId)!);
+      const trigger = await observer.query<{ count: number }>(`
+        SELECT count(*)::int AS count
+        FROM pg_trigger
+        WHERE tgrelid = '"Message"'::regclass
+          AND tgname = 'Message_assign_change_version'
+          AND tgenabled <> 'D'
+      `);
+      expect(trigger.rows[0].count).toBe(1);
+    } finally {
+      await writer.query("ROLLBACK").catch(() => undefined);
+      await migration?.catch(() => undefined);
+      await write?.catch(() => undefined);
+      await Promise.all([
+        seedClient.end().catch(() => undefined),
+        writer.end().catch(() => undefined),
+        migrator.end().catch(() => undefined),
+        observer.end().catch(() => undefined),
+      ]);
+      await cleanupMigrationWorkspace(root);
+    }
+  }, 60_000);
+
   it.each(["reverse-duplicate", "invalid-participants"] as const)(
     "rolls back %s before DDL and succeeds after legacy repair",
     async (failure) => {

@@ -259,8 +259,13 @@ describe("chat polling indexes", () => {
     expect(sql).toContain("LEAST(conversation_record.\"teacherId\"::text, conversation_record.\"parentId\"::text)");
     expect(sql).toContain("GREATEST(conversation_record.\"teacherId\"::text, conversation_record.\"parentId\"::text)");
     expect(sql).toContain("pg_advisory_xact_lock(hashtextextended(pair_key, 0))");
-    expect(sql).toContain("nextval('\"Message_changeVersion_seq\"')");
-    expect(sql.indexOf("pg_advisory_xact_lock")).toBeLessThan(sql.indexOf("nextval"));
+    const triggerNextval = 'NEW."changeVersion" := nextval(\'"Message_changeVersion_seq"\')';
+    expect(sql).toContain(triggerNextval);
+    expect(sql.indexOf("pg_advisory_xact_lock")).toBeLessThan(sql.indexOf(triggerNextval));
+    const backfill = 'SET "changeVersion" = nextval(\'"Message_changeVersion_seq"\')';
+    expect(sql).toContain(backfill);
+    expect(sql.indexOf(backfill)).toBeLessThan(sql.indexOf('CREATE TRIGGER "Message_assign_change_version"'));
+    expect(sql).not.toContain('SET "changeVersion" = 0');
     expect(sql).toContain('CREATE INDEX "Message_conversationId_changeVersion_idx"');
     expect(sql).toContain('DROP INDEX "Message_conversationId_updatedAt_id_idx"');
   });
