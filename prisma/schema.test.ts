@@ -96,3 +96,17 @@ describe("region adjacency schema", () => {
     expect(sql).toContain('CHECK ("regionAId" < "regionBId")');
   });
 });
+
+describe("teacher profile schema", () => {
+  it("stores identity, online availability and a bounded hourly rate range", () => {
+    expect(schema).toContain("enum TeacherIdentityType");
+    expect(schema).toMatch(/identityType\s+TeacherIdentityType\?/);
+    expect(schema).toMatch(/isOnline\s+Boolean\s+@default\(false\)/);
+    expect(schema).toMatch(/hourlyRateMax\s+Decimal\?\s+@db\.Decimal\(10, 2\)/);
+
+    const teacherMigration = readdirSync(migrationsDirectory, { withFileTypes: true }).find(
+      (entry) => entry.isDirectory() && entry.name.endsWith("_teacher_profiles"),
+    );
+    expect(teacherMigration).toBeDefined();
+  });
+});
