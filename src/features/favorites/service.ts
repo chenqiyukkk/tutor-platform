@@ -4,7 +4,7 @@ import { Prisma, type PrismaClient } from "@prisma/client";
 import { z } from "zod";
 
 import type { AuthenticatedAccount } from "@/features/auth/service";
-import { violatesContactPolicy } from "@/features/safety/contact-policy";
+import { CURRENT_PUBLIC_CONTENT_SAFETY_VERSION } from "@/features/safety/public-content-version";
 
 import { decodeFavoriteCursor, encodeFavoriteCursor, favoriteListQuerySchema } from "./schema";
 
@@ -34,6 +34,7 @@ export class FavoriteWorkflowError extends Error {
 const teacherPublicWhere = {
   status: "PUBLISHED" as const,
   publishedAt: { not: null },
+  publicContentSafetyVersion: CURRENT_PUBLIC_CONTENT_SAFETY_VERSION,
   displayName: { not: "" },
   headline: { not: null },
   identityType: { not: null },
@@ -50,6 +51,7 @@ function requestPublicWhere(now: Date) {
   return {
     status: "PUBLISHED" as const,
     publishedAt: { not: null },
+    publicContentSafetyVersion: CURRENT_PUBLIC_CONTENT_SAFETY_VERSION,
     title: { not: "" },
     description: { not: "" },
     OR: [{ expiresAt: null }, { expiresAt: { gt: now } }],
@@ -58,33 +60,6 @@ function requestPublicWhere(now: Date) {
     region: { is: { isActive: true, level: 3 } },
     subjects: { some: {}, every: { subject: { isActive: true } } },
   };
-}
-
-function isSafeTeacherPublicText(profile: { displayName: string; headline: string | null; bio: string | null }) {
-  return profile.displayName.trim() !== ""
-    && profile.headline !== null
-    && profile.headline.trim() !== ""
-    && ![profile.displayName, profile.headline, profile.bio].some(violatesContactPolicy);
-}
-
-function isSafeRequestPublicText(request: {
-  title: string;
-  description: string;
-  scheduleText: string | null;
-  publicLocationNote: string | null;
-  studentProfile: { displayName: string } | null;
-}) {
-  return request.title.trim() !== ""
-    && request.description.trim() !== ""
-    && request.studentProfile !== null
-    && request.studentProfile.displayName.trim() !== ""
-    && ![
-      request.title,
-      request.description,
-      request.scheduleText,
-      request.publicLocationNote,
-      request.studentProfile.displayName,
-    ].some(violatesContactPolicy);
 }
 
 export function createFavoriteService(prisma: PrismaClient, now: () => Date = () => new Date()) {
@@ -102,22 +77,18 @@ export function createFavoriteService(prisma: PrismaClient, now: () => Date = ()
     if (target.targetType === "teacher") {
       const profile = await client.teacherProfile.findFirst({
         where: { AND: [{ id: target.targetId }, teacherPublicWhere] },
-        select: { id: true, accountId: true, displayName: true, headline: true, bio: true },
+        select: { id: true, accountId: true },
       });
-      if (!profile || profile.accountId === actor.id || !isSafeTeacherPublicText(profile)) {
+      if (!profile || profile.accountId === actor.id) {
         throw new FavoriteWorkflowError("INVALID_TARGET", "老师资料当前不可收藏");
       }
       return;
     }
     const request = await client.tutoringRequest.findFirst({
       where: { AND: [{ id: target.targetId }, requestPublicWhere(now())] },
-      select: {
-        id: true, parentProfileId: true, title: true, description: true,
-        scheduleText: true, publicLocationNote: true,
-        studentProfile: { select: { displayName: true } },
-      },
+      select: { id: true, parentProfileId: true },
     });
-    if (!request || !isSafeRequestPublicText(request)) throw new FavoriteWorkflowError("INVALID_TARGET", "家教需求当前不可收藏");
+    if (!request) throw new FavoriteWorkflowError("INVALID_TARGET", "家教需求当前不可收藏");
     const parent = await client.parentProfile.findUnique({ where: { id: request.parentProfileId }, select: { accountId: true } });
     if (!parent || parent.accountId === actor.id) throw new FavoriteWorkflowError("INVALID_TARGET", "家教需求当前不可收藏");
   }
@@ -170,7 +141,9 @@ export function createFavoriteService(prisma: PrismaClient, now: () => Date = ()
       assertTargetRole(actor, target.targetType);
       return (await prisma.favorite.count({ where: {
         ownerAccountId: actor.id,
-        ...(target.targetType === "teacher" ? { teacherProfileId: target.targetId } : { tutoringRequestId: target.targetId }),
+        ...(target.targetType === "teacher"
+          ? { teacherProfileId: target.targetId, teacherProfile: { is: teacherPublicWhere } }
+          : { tutoringRequestId: target.targetId, tutoringRequest: { is: requestPublicWhere(now()) } }),
       } })) > 0;
     },
 
@@ -234,9 +207,9 @@ export function createFavoriteService(prisma: PrismaClient, now: () => Date = ()
         const targetIds = pageRows.flatMap(({ teacherProfileId }) => teacherProfileId ? [teacherProfileId] : []);
         const targets = await prisma.teacherProfile.findMany({
           where: { AND: [{ id: { in: targetIds } }, teacherPublicWhere] },
-          select: { id: true, displayName: true, headline: true, bio: true },
+          select: { id: true, displayName: true, headline: true },
         });
-        const byId = new Map(targets.filter(isSafeTeacherPublicText).map((target) => [target.id, target]));
+        const byId = new Map(targets.map((target) => [target.id, target]));
         items = pageRows.flatMap((favorite) => {
           const target = favorite.teacherProfileId ? byId.get(favorite.teacherProfileId) : undefined;
           return target ? [{
@@ -252,12 +225,9 @@ export function createFavoriteService(prisma: PrismaClient, now: () => Date = ()
         const targetIds = pageRows.flatMap(({ tutoringRequestId }) => tutoringRequestId ? [tutoringRequestId] : []);
         const targets = await prisma.tutoringRequest.findMany({
           where: { AND: [{ id: { in: targetIds } }, requestPublicWhere(at)] },
-          select: {
-            id: true, title: true, description: true, scheduleText: true, publicLocationNote: true,
-            studentProfile: { select: { displayName: true } },
-          },
+          select: { id: true, title: true },
         });
-        const byId = new Map(targets.filter(isSafeRequestPublicText).map((target) => [target.id, target]));
+        const byId = new Map(targets.map((target) => [target.id, target]));
         items = pageRows.flatMap((favorite) => {
           const target = favorite.tutoringRequestId ? byId.get(favorite.tutoringRequestId) : undefined;
           return target ? [{

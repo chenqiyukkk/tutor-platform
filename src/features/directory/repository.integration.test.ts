@@ -95,6 +95,7 @@ describe("Prisma public directory repository", () => {
       isOnline: true,
       status: "PUBLISHED",
       publishedAt,
+      publicContentSafetyVersion: 1,
       subjects: { create: { subjectId: activeSubject.id } },
       serviceAreas: { create: { regionId: activeRegion.id, isPrimary: true } },
     } });
@@ -163,6 +164,7 @@ describe("Prisma public directory repository", () => {
       publicLocationNote: "五道口商圈附近",
       status: "PUBLISHED",
       publishedAt,
+      publicContentSafetyVersion: 1,
       subjects: { create: { subjectId: activeSubject.id } },
     } });
     visibleRequestId = visibleRequest.id;
@@ -192,16 +194,50 @@ describe("Prisma public directory repository", () => {
       status: "PUBLISHED", publishedAt, expiresAt: new Date("2026-01-01T00:00:00.000Z"),
       subjects: { create: { subjectId: activeSubject.id } },
     } });
+    const staleTeacherAccount = await account("TEACHER", "stale-safety-teacher");
+    const staleTeacher = await prisma.teacherProfile.create({ data: {
+      accountId: staleTeacherAccount.id,
+      displayName: "旧版安全教师",
+      identityType: "FULL_TIME_TEACHER",
+      headline: "Signal: tutor88",
+      bio: "字段完整但没有通过当前安全策略",
+      yearsExperience: 5,
+      hourlyRate: 100,
+      hourlyRateMax: 180,
+      isOnline: true,
+      status: "PUBLISHED",
+      publishedAt: new Date("2026-07-02T08:00:00.000Z"),
+      publicContentSafetyVersion: 0,
+      subjects: { create: { subjectId: activeSubject.id } },
+      serviceAreas: { create: { regionId: activeRegion.id, isPrimary: true } },
+    } });
+    const staleRequest = await prisma.tutoringRequest.create({ data: {
+      parentProfileId: parentProfile.id,
+      studentProfileId: student.id,
+      regionId: activeRegion.id,
+      title: "Signal: tutor88",
+      description: "字段完整但没有通过当前安全策略",
+      scheduleText: "周日下午",
+      budgetMin: 10000,
+      budgetMax: 16000,
+      teachingMode: "BOTH",
+      status: "PUBLISHED",
+      publishedAt: new Date("2026-07-02T08:00:00.000Z"),
+      publicContentSafetyVersion: 0,
+      subjects: { create: { subjectId: activeSubject.id } },
+    } });
     expiredRequestId = expiredRequest.id;
     hiddenTeacherIds = [
       disabledTeacher.id,
       inactiveSubjectTeacher.id,
       inactiveRegionTeacher.id,
+      staleTeacher.id,
     ];
     hiddenRequestIds = [
       inactiveSubjectRequest.id,
       inactiveRegionRequest.id,
       expiredRequest.id,
+      staleRequest.id,
     ];
   });
 
@@ -257,6 +293,7 @@ describe("Prisma public directory repository", () => {
           isOnline: true,
           status: "PUBLISHED",
           publishedAt: new Date("2026-07-01T08:00:00.000Z"),
+          publicContentSafetyVersion: 1,
         } });
         await prisma.teacherSubject.create({ data: {
           teacherProfileId: profile.id, subjectId: activeSubjectId,
@@ -287,6 +324,12 @@ describe("Prisma public directory repository", () => {
       const second = await repository.listTeachers({ page: 2, pageSize: 1 });
       const third = await repository.listTeachers({ page: 3, pageSize: 1 });
       const repeated = await repository.listTeachers({ page: 1, pageSize: 1 });
+      expect(first.total).toBe(3);
+      expect(second.total).toBe(3);
+      expect(third.total).toBe(3);
+      expect(first.items).toHaveLength(1);
+      expect(second.items).toHaveLength(1);
+      expect(third.items).toHaveLength(1);
       expect(new Set([...first.items, ...second.items, ...third.items].map(({ id }) => id)).size).toBe(3);
       expect(repeated.items.map(({ id }) => id)).toEqual(first.items.map(({ id }) => id));
     } finally {
@@ -325,20 +368,35 @@ describe("Prisma public directory repository", () => {
 
   it("defends public reads from incomplete or contact-bearing persisted content", async () => {
     for (const headline of [null, "", "   "]) {
-      await prisma.teacherProfile.update({ where: { id: visibleTeacherId }, data: { headline } });
+      await prisma.teacherProfile.update({
+        where: { id: visibleTeacherId },
+        data: { headline, publicContentSafetyVersion: 0 },
+      });
       await expect(repository.getTeacherPreview(visibleTeacherId)).resolves.toBeNull();
       expect((await repository.listTeachers({ page: 1, pageSize: 12 })).items.map(({ id }) => id))
         .not.toContain(visibleTeacherId);
     }
-    await prisma.teacherProfile.update({ where: { id: visibleTeacherId }, data: { headline: "Signal: tutor88" } });
+    await prisma.teacherProfile.update({
+      where: { id: visibleTeacherId },
+      data: { headline: "Signal: tutor88", publicContentSafetyVersion: 0 },
+    });
     await expect(repository.getTeacherDetail(visibleTeacherId)).resolves.toBeNull();
-    await prisma.teacherProfile.update({ where: { id: visibleTeacherId }, data: { headline: "把几何讲成方法" } });
+    await prisma.teacherProfile.update({
+      where: { id: visibleTeacherId },
+      data: { headline: "把几何讲成方法", publicContentSafetyVersion: 1 },
+    });
 
     await prisma.studentProfile.update({ where: { id: visibleStudentId }, data: { displayName: "抖音号 tutor88" } });
+    await prisma.tutoringRequest.update({
+      where: { id: visibleRequestId }, data: { publicContentSafetyVersion: 0 },
+    });
     await expect(repository.getRequestPreview(visibleRequestId)).resolves.toBeNull();
     expect((await repository.listRequests({ page: 1, pageSize: 12 })).items.map(({ id }) => id))
       .not.toContain(visibleRequestId);
     await prisma.studentProfile.update({ where: { id: visibleStudentId }, data: { displayName: "小树" } });
+    await prisma.tutoringRequest.update({
+      where: { id: visibleRequestId }, data: { publicContentSafetyVersion: 1 },
+    });
   });
 
   it("rejects invalid, repeated, and unknown API queries before a real repository call", async () => {

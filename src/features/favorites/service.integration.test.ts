@@ -31,10 +31,10 @@ describe("favorites against PostgreSQL", () => {
     const subject = await prisma.subject.create({ data: { slug: `f-${marker}`, name: "收藏数学" } }); subjectIds.push(subject.id);
     const parent = await prisma.parentProfile.create({ data: { accountId: parentId, displayName: "收藏家长", status: "PUBLISHED" } });
     const student = await prisma.studentProfile.create({ data: { parentProfileId: parent.id, displayName: "收藏学生", isActive: true } });
-    const profile = await prisma.teacherProfile.create({ data: { accountId: teacherId, displayName: "收藏老师", identityType: "FULL_TIME_TEACHER", headline: "公开老师", bio: "公开自述", yearsExperience: 2, hourlyRate: 80, hourlyRateMax: 100, status: "PUBLISHED", publishedAt: new Date() } }); profileId = profile.id;
+    const profile = await prisma.teacherProfile.create({ data: { accountId: teacherId, displayName: "收藏老师", identityType: "FULL_TIME_TEACHER", headline: "公开老师", bio: "公开自述", yearsExperience: 2, hourlyRate: 80, hourlyRateMax: 100, status: "PUBLISHED", publishedAt: new Date(), publicContentSafetyVersion: 1 } }); profileId = profile.id;
     await prisma.teacherSubject.create({ data: { teacherProfileId: profileId, subjectId: subject.id } });
     await prisma.teacherServiceArea.create({ data: { teacherProfileId: profileId, regionId: region.id, isPrimary: true } });
-    const request = await prisma.tutoringRequest.create({ data: { parentProfileId: parent.id, studentProfileId: student.id, regionId: region.id, title: "公开需求", description: "公开描述", budgetMin: 8000, budgetMax: 10000, teachingMode: "BOTH", status: "PUBLISHED", publishedAt: new Date(), expiresAt: new Date(Date.now()+DAY) } }); requestId = request.id;
+    const request = await prisma.tutoringRequest.create({ data: { parentProfileId: parent.id, studentProfileId: student.id, regionId: region.id, title: "公开需求", description: "公开描述", budgetMin: 8000, budgetMax: 10000, teachingMode: "BOTH", status: "PUBLISHED", publishedAt: new Date(), expiresAt: new Date(Date.now()+DAY), publicContentSafetyVersion: 1 } }); requestId = request.id;
     await prisma.requestSubject.create({ data: { tutoringRequestId: requestId, subjectId: subject.id } });
   });
 
@@ -135,7 +135,7 @@ describe("favorites against PostgreSQL", () => {
     ] } })).resolves.toBe(0);
   });
 
-  it("filters stale role-associated targets before applying the initial page limit", async () => {
+  it("filters unvalidated unsafe targets before applying the initial page limit", async () => {
     const staleAccount = await prisma.account.create({ data: {
       role: "TEACHER",
       username: `fav-stale-${marker}`,
@@ -148,8 +148,18 @@ describe("favorites against PostgreSQL", () => {
     const staleProfile = await prisma.teacherProfile.create({ data: {
       accountId: staleAccount.id,
       displayName: "已下架老师",
-      status: "DRAFT",
+      identityType: "FULL_TIME_TEACHER",
+      headline: "Signal: unsafe88",
+      bio: "公开教学自述",
+      yearsExperience: 3,
+      hourlyRate: 80,
+      hourlyRateMax: 120,
+      status: "PUBLISHED",
+      publishedAt: new Date("2026-07-04T00:00:00.000Z"),
+      publicContentSafetyVersion: 0,
     } });
+    await prisma.teacherSubject.create({ data: { teacherProfileId: staleProfile.id, subjectId: subjectIds[0] } });
+    await prisma.teacherServiceArea.create({ data: { teacherProfileId: staleProfile.id, regionId: regionIds[0], isPrimary: true } });
     await prisma.favorite.deleteMany({ where: { ownerAccountId: parentId } });
     await prisma.favorite.createMany({ data: [
       { ownerAccountId: parentId, teacherProfileId: staleProfile.id, createdAt: new Date("2026-07-03T00:00:00.000Z") },
@@ -187,8 +197,10 @@ describe("favorites against PostgreSQL", () => {
     })) });
     await prisma.teacherProfile.createMany({ data: targets.map(({ accountId, profileId, index }) => ({
       id: profileId, accountId, displayName: `分页老师${index}`, identityType: "FULL_TIME_TEACHER",
-      headline: `分页摘要${index}`, bio: "分页公开自述", yearsExperience: 2, hourlyRate: 80,
+      headline: [10, 30].includes(index) ? "Signal: unsafe88" : `分页摘要${index}`,
+      bio: "分页公开自述", yearsExperience: 2, hourlyRate: 80,
       hourlyRateMax: 100, status: "PUBLISHED", publishedAt: new Date("2026-07-01T00:00:00.000Z"),
+      publicContentSafetyVersion: [10, 30].includes(index) ? 0 : 1,
     })) });
     await prisma.teacherSubject.createMany({ data: targets.map(({ profileId }) => ({
       teacherProfileId: profileId, subjectId: subjectIds[0],
@@ -203,11 +215,14 @@ describe("favorites against PostgreSQL", () => {
     }));
     await prisma.favorite.createMany({ data: rows });
     const expected = rows
+      .filter((row) => ![targets[10].profileId, targets[30].profileId].includes(row.teacherProfileId))
       .toSorted((left, right) => right.createdAt.getTime() - left.createdAt.getTime() || left.id.localeCompare(right.id))
       .map(({ id }) => id);
     const service = createFavoriteService(prisma);
     const collected: string[] = [];
+    const pageLengths: number[] = [];
     let page = await service.list({ id: pagingParent.id, role: "parent" }, { pageSize: 20 });
+    pageLengths.push(page.items.length);
     collected.push(...page.items.map(({ id }) => id));
     expect(page.nextCursor).toEqual(expect.any(String));
 
@@ -220,11 +235,13 @@ describe("favorites against PostgreSQL", () => {
         { id: pagingParent.id, role: "parent" },
         { pageSize: 20, cursor: page.nextCursor },
       );
+      pageLengths.push(page.items.length);
       collected.push(...page.items.map(({ id }) => id));
     }
 
+    expect(pageLengths).toEqual([20, 20, 13]);
     expect(collected).toEqual(expected);
-    expect(new Set(collected).size).toBe(55);
+    expect(new Set(collected).size).toBe(53);
     expect(collected).not.toContain(late.id);
   });
 });

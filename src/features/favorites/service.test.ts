@@ -38,11 +38,11 @@ function createListDb(role: "parent" | "teacher") {
   ];
   const targetRows = [
     role === "parent"
-      ? { id: secondTargetId, displayName: "第二位老师", headline: "第二条摘要" }
-      : { id: secondTargetId, title: "第二条需求" },
+      ? { id: secondTargetId, displayName: "第二位老师", headline: "第二条摘要", bio: "公开自述" }
+      : { id: secondTargetId, title: "第二条需求", description: "公开描述", scheduleText: "周末", publicLocationNote: "商圈附近", studentProfile: { displayName: "学生乙" } },
     role === "parent"
-      ? { id: firstTargetId, displayName: "第一位老师", headline: "第一条摘要" }
-      : { id: firstTargetId, title: "第一条需求" },
+      ? { id: firstTargetId, displayName: "第一位老师", headline: "第一条摘要", bio: "公开自述" }
+      : { id: firstTargetId, title: "第一条需求", description: "公开描述", scheduleText: "周末", publicLocationNote: "商圈附近", studentProfile: { displayName: "学生甲" } },
   ];
   const teacherFindMany = vi.fn(async () => role === "parent" ? targetRows : []);
   const requestFindMany = vi.fn(async () => role === "teacher" ? targetRows : []);

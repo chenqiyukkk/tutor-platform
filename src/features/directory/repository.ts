@@ -1,7 +1,7 @@
 import "server-only";
 
 import { Prisma, type PrismaClient } from "@prisma/client";
-import { violatesContactPolicy } from "@/features/safety/contact-policy";
+import { CURRENT_PUBLIC_CONTENT_SAFETY_VERSION } from "@/features/safety/public-content-version";
 
 import type { RequestDirectoryQuery, TeacherDirectoryQuery } from "./query";
 import {
@@ -22,7 +22,6 @@ const teacherPreviewScalarSelect = {
   displayName: true,
   identityType: true,
   headline: true,
-  bio: true,
   yearsExperience: true,
   hourlyRate: true,
   hourlyRateMax: true,
@@ -30,14 +29,15 @@ const teacherPreviewScalarSelect = {
   publishedAt: true,
 } satisfies Prisma.TeacherProfileSelect;
 
-const teacherDetailScalarSelect = teacherPreviewScalarSelect;
+const teacherDetailScalarSelect = {
+  ...teacherPreviewScalarSelect,
+  bio: true,
+} satisfies Prisma.TeacherProfileSelect;
 
 const requestPreviewScalarSelect = {
   id: true,
   title: true,
-  description: true,
   scheduleText: true,
-  publicLocationNote: true,
   budgetMin: true,
   budgetMax: true,
   teachingMode: true,
@@ -46,11 +46,16 @@ const requestPreviewScalarSelect = {
   regionId: true,
 } satisfies Prisma.TutoringRequestSelect;
 
-const requestDetailScalarSelect = requestPreviewScalarSelect;
+const requestDetailScalarSelect = {
+  ...requestPreviewScalarSelect,
+  description: true,
+  publicLocationNote: true,
+} satisfies Prisma.TutoringRequestSelect;
 
 const teacherPublicBase: Prisma.TeacherProfileWhereInput = {
   status: "PUBLISHED",
   publishedAt: { not: null },
+  publicContentSafetyVersion: CURRENT_PUBLIC_CONTENT_SAFETY_VERSION,
   displayName: { not: "" },
   headline: { not: null },
   identityType: { not: null },
@@ -69,37 +74,11 @@ const teacherPublicBase: Prisma.TeacherProfileWhereInput = {
   },
 };
 
-function isSafeTeacherPublicText(profile: { displayName: string; headline: string | null; bio: string | null }) {
-  return profile.displayName.trim() !== ""
-    && profile.headline !== null
-    && profile.headline.trim() !== ""
-    && ![profile.displayName, profile.headline, profile.bio].some(violatesContactPolicy);
-}
-
-function isSafeRequestPublicText(request: {
-  title: string;
-  description: string;
-  scheduleText: string | null;
-  publicLocationNote: string | null;
-  studentProfile: { displayName: string } | null;
-}) {
-  return request.title.trim() !== ""
-    && request.description.trim() !== ""
-    && request.studentProfile !== null
-    && request.studentProfile.displayName.trim() !== ""
-    && ![
-      request.title,
-      request.description,
-      request.scheduleText,
-      request.publicLocationNote,
-      request.studentProfile.displayName,
-    ].some(violatesContactPolicy);
-}
-
 function requestPublicBase(now = new Date()): Prisma.TutoringRequestWhereInput {
   return {
     status: "PUBLISHED",
     publishedAt: { not: null },
+    publicContentSafetyVersion: CURRENT_PUBLIC_CONTENT_SAFETY_VERSION,
     title: { not: "" },
     description: { not: "" },
     OR: [{ expiresAt: null }, { expiresAt: { gt: now } }],
@@ -278,7 +257,7 @@ export class PrismaDirectoryRepository implements DirectoryRepository {
       const total = await transaction.teacherProfile.count({ where });
       const hydrated = await this.hydrateTeachers(transaction, rows);
       return {
-        items: hydrated.filter(isSafeTeacherPublicText).map(toPublicTeacherListItem),
+        items: hydrated.map(toPublicTeacherListItem),
         total,
         page: query.page,
         pageSize: query.pageSize,
@@ -294,7 +273,6 @@ export class PrismaDirectoryRepository implements DirectoryRepository {
       });
       if (!row) return null;
       const [hydrated] = await this.hydrateTeachers(transaction, [row]);
-      if (!isSafeTeacherPublicText(hydrated)) return null;
       return toPublicTeacherListItem(hydrated);
     }, { isolationLevel: "RepeatableRead" });
   }
@@ -307,7 +285,6 @@ export class PrismaDirectoryRepository implements DirectoryRepository {
       });
       if (!row) return null;
       const [hydrated] = await this.hydrateTeachers(transaction, [row]);
-      if (!isSafeTeacherPublicText(hydrated)) return null;
       return toPublicTeacherDetail(hydrated);
     }, { isolationLevel: "RepeatableRead" });
   }
@@ -325,7 +302,7 @@ export class PrismaDirectoryRepository implements DirectoryRepository {
       const total = await transaction.tutoringRequest.count({ where });
       const hydrated = await this.hydrateRequests(transaction, rows);
       return {
-        items: hydrated.filter(isSafeRequestPublicText).map(toPublicRequestListItem),
+        items: hydrated.map(toPublicRequestListItem),
         total,
         page: query.page,
         pageSize: query.pageSize,
@@ -341,7 +318,6 @@ export class PrismaDirectoryRepository implements DirectoryRepository {
       });
       if (!row) return null;
       const [hydrated] = await this.hydrateRequests(transaction, [row]);
-      if (!isSafeRequestPublicText(hydrated)) return null;
       return toPublicRequestListItem(hydrated);
     }, { isolationLevel: "RepeatableRead" });
   }
@@ -354,7 +330,6 @@ export class PrismaDirectoryRepository implements DirectoryRepository {
       });
       if (!row) return null;
       const [hydrated] = await this.hydrateRequests(transaction, [row]);
-      if (!isSafeRequestPublicText(hydrated)) return null;
       return toPublicRequestDetail(hydrated);
     }, { isolationLevel: "RepeatableRead" });
   }
