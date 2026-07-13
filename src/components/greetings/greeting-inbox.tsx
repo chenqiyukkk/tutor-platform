@@ -26,6 +26,9 @@ export function GreetingInbox({ realm }: { realm: "parent" | "teacher" }) {
   const [reason, setReason] = useState("");
   const generation = useRef(0);
   const activeController = useRef<AbortController | null>(null);
+  const reasonDialog = useRef<HTMLDialogElement | null>(null);
+  const reasonInput = useRef<HTMLTextAreaElement | null>(null);
+  const reasonTrigger = useRef<HTMLElement | null>(null);
   const cursor = cursorHistory[cursorIndex] ?? null;
 
   useEffect(() => {
@@ -45,6 +48,17 @@ export function GreetingInbox({ realm }: { realm: "parent" | "teacher" }) {
     return () => controller.abort();
   }, [box, cursor, realm, reloadToken]);
 
+  useEffect(() => {
+    const dialog = reasonDialog.current;
+    if (!dialog) return;
+    if (reasonRequest) {
+      if (!dialog.open) dialog.showModal();
+      reasonInput.current?.focus();
+    } else if (dialog.open) {
+      dialog.close();
+    }
+  }, [reasonRequest]);
+
   function invalidateView() {
     generation.current += 1;
     activeController.current?.abort();
@@ -53,6 +67,7 @@ export function GreetingInbox({ realm }: { realm: "parent" | "teacher" }) {
   function switchBox(value: "received" | "sent") {
     if (value === box) return;
     invalidateView();
+    reasonTrigger.current = null;
     setReasonRequest(null); setReason("");
     setState("loading"); setItems([]); setNextCursor(null);
     setCursorHistory([null]); setCursorIndex(0); setBox(value);
@@ -89,11 +104,24 @@ export function GreetingInbox({ realm }: { realm: "parent" | "teacher" }) {
 
   function requestAction(id: string, actionName: "accept" | "reject" | "report" | "block") {
     if (actionName === "report" || actionName === "block") {
+      reasonTrigger.current = document.activeElement instanceof HTMLElement ? document.activeElement : null;
       setReason("");
       setReasonRequest({ id, action: actionName });
       return;
     }
     void action(id, actionName);
+  }
+
+  function closeReasonDialog() {
+    reasonDialog.current?.close();
+  }
+
+  function handleReasonClose() {
+    setReasonRequest(null);
+    setReason("");
+    const trigger = reasonTrigger.current;
+    reasonTrigger.current = null;
+    trigger?.focus();
   }
 
   return <section className="greeting-inbox" aria-live="polite">
@@ -103,22 +131,28 @@ export function GreetingInbox({ realm }: { realm: "parent" | "teacher" }) {
     {state === "ready" && items.length === 0 ? <div className="greeting-empty"><span aria-hidden="true">信</span><h2>{box === "received" ? "还没有收到打招呼" : "还没有发出打招呼"}</h2><p>从公开名册中找到合适的老师或需求，再通过受控卡片表达意向。</p></div> : null}
     {state === "ready" && items.length > 0 ? <div className="greeting-list">{items.map((item) => <GreetingCard busy={actionBusy === item.id} item={item} key={item.id} onAction={async (name) => requestAction(item.id, name)} />)}</div> : null}
     {state === "ready" ? <nav className="greeting-inbox__pagination" aria-label="往来卡片分页"><button className="button button--outline button--small" disabled={cursorIndex === 0} onClick={previousPage} type="button">上一页</button><button className="button button--outline button--small" disabled={!nextCursor} onClick={nextPage} type="button">下一页</button></nav> : null}
-    {reasonRequest ? <dialog aria-labelledby="greeting-reason-title" aria-modal="true" open>
-      <form onSubmit={(event) => {
+    <dialog
+      aria-labelledby="greeting-reason-title"
+      aria-modal="true"
+      onCancel={(event) => { event.preventDefault(); closeReasonDialog(); }}
+      onClose={handleReasonClose}
+      ref={reasonDialog}
+    >
+      {reasonRequest ? <form onSubmit={(event) => {
         event.preventDefault();
         const trimmed = reason.trim();
         if (!trimmed) return;
         const request = reasonRequest;
-        setReasonRequest(null); setReason("");
+        closeReasonDialog();
         void action(request.id, request.action, trimmed);
       }}>
         <h2 id="greeting-reason-title">{reasonRequest.action === "report" ? "请说明举报原因" : "请说明屏蔽原因"}</h2>
-        <label>{reasonRequest.action === "report" ? "举报原因" : "屏蔽原因"}<textarea autoFocus maxLength={200} onChange={(event) => setReason(event.target.value)} required rows={4} value={reason} /></label>
+        <label>{reasonRequest.action === "report" ? "举报原因" : "屏蔽原因"}<textarea maxLength={200} onChange={(event) => setReason(event.target.value)} ref={reasonInput} required rows={4} value={reason} /></label>
         <div className="greeting-card__actions">
-          <button className="button button--outline" onClick={() => { setReasonRequest(null); setReason(""); }} type="button">取消</button>
+          <button className="button button--outline" onClick={closeReasonDialog} type="button">取消</button>
           <button className="button button--primary" disabled={!reason.trim()} type="submit">{reasonRequest.action === "report" ? "确认举报" : "确认屏蔽"}</button>
         </div>
-      </form>
-    </dialog> : null}
+      </form> : null}
+    </dialog>
   </section>;
 }

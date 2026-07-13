@@ -109,6 +109,15 @@ describe("GreetingInbox", () => {
   });
 
   it("collects report reasons in an accessible dialog instead of a browser prompt", async () => {
+    const originalShowModal = Object.getOwnPropertyDescriptor(HTMLDialogElement.prototype, "showModal");
+    const originalClose = Object.getOwnPropertyDescriptor(HTMLDialogElement.prototype, "close");
+    const showModal = vi.fn(function (this: HTMLDialogElement) { this.setAttribute("open", ""); });
+    const close = vi.fn(function (this: HTMLDialogElement) {
+      this.removeAttribute("open");
+      this.dispatchEvent(new Event("close"));
+    });
+    Object.defineProperty(HTMLDialogElement.prototype, "showModal", { configurable: true, value: showModal });
+    Object.defineProperty(HTMLDialogElement.prototype, "close", { configurable: true, value: close });
     const fetchMock = vi.fn<(input: RequestInfo | URL, init?: RequestInit) => Promise<Response>>(async (_input, init) => {
       if (init?.method === "POST") return Response.json({ greeting: { status: "REPORTED" } });
       return Response.json({
@@ -120,21 +129,38 @@ describe("GreetingInbox", () => {
         nextCursor: null,
       });
     });
-    vi.stubGlobal("fetch", fetchMock);
-    render(<GreetingInbox realm="parent" />);
+    try {
+      vi.stubGlobal("fetch", fetchMock);
+      render(<GreetingInbox realm="parent" />);
 
-    fireEvent.click(await screen.findByRole("button", { name: "举报" }));
-    const dialog = screen.getByRole("dialog", { name: "请说明举报原因" });
-    expect(dialog).toHaveAttribute("aria-modal", "true");
-    fireEvent.change(screen.getByLabelText("举报原因"), { target: { value: "疑似不当信息" } });
-    fireEvent.click(screen.getByRole("button", { name: "确认举报" }));
+      const trigger = await screen.findByRole("button", { name: "举报" });
+      trigger.focus();
+      fireEvent.click(trigger);
+      const dialog = screen.getByRole("dialog", { name: "请说明举报原因" });
+      expect(showModal).toHaveBeenCalledOnce();
+      expect(dialog).toHaveAttribute("aria-modal", "true");
+      fireEvent.change(screen.getByLabelText("举报原因"), { target: { value: "疑似不当信息" } });
+      fireEvent.click(screen.getByRole("button", { name: "确认举报" }));
 
-    await waitFor(() => expect(fetchMock).toHaveBeenCalledWith(
-      "/api/greetings/00000000-0000-4000-8000-000000000001?realm=parent",
-      expect.objectContaining({
-        method: "POST",
-        body: JSON.stringify({ action: "report", reason: "疑似不当信息" }),
-      }),
-    ));
+      await waitFor(() => expect(fetchMock).toHaveBeenCalledWith(
+        "/api/greetings/00000000-0000-4000-8000-000000000001?realm=parent",
+        expect.objectContaining({
+          method: "POST",
+          body: JSON.stringify({ action: "report", reason: "疑似不当信息" }),
+        }),
+      ));
+
+      fireEvent.click(trigger);
+      const reopened = screen.getByRole("dialog", { name: "请说明举报原因" });
+      fireEvent(reopened, new Event("cancel", { cancelable: true }));
+      expect(close).toHaveBeenCalled();
+      await waitFor(() => expect(trigger).toHaveFocus());
+      expect(screen.queryByRole("dialog", { name: "请说明举报原因" })).not.toBeInTheDocument();
+    } finally {
+      if (originalShowModal) Object.defineProperty(HTMLDialogElement.prototype, "showModal", originalShowModal);
+      else delete (HTMLDialogElement.prototype as Partial<HTMLDialogElement>).showModal;
+      if (originalClose) Object.defineProperty(HTMLDialogElement.prototype, "close", originalClose);
+      else delete (HTMLDialogElement.prototype as Partial<HTMLDialogElement>).close;
+    }
   });
 });
