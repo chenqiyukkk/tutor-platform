@@ -53,19 +53,20 @@ function request(status: TutoringRequest["status"] = "DRAFT"): TutoringRequest {
 
 function setup(initial = request()) {
   let current = initial;
+  const ownerAccountId = parentA.id;
   const repository: RequestRepository = {
     listStudents: async () => [],
     createStudent: async (_accountId, input) => ({ id: ids.student, ...input, isActive: true }),
     updateStudent: async (_accountId, _id, input) => ({ id: ids.student, ...input, isActive: true }),
     deactivateStudent: async () => undefined,
-    listRequests: async () => [current],
-    findRequest: async (_accountId, requestId) => requestId === current.id ? current : null,
+    listRequests: async (accountId) => accountId === ownerAccountId ? [current] : [],
+    findRequest: async (accountId, requestId) => accountId === ownerAccountId && requestId === current.id ? current : null,
     createRequest: async (_accountId, input) => {
       current = { ...current, ...input, subjects: input.subjectIds.map((id) => ({ id, name: "数学", isActive: true })) };
       return current;
     },
-    updateRequest: async (_accountId, requestId, input) => {
-      if (requestId !== current.id) throw new RequestWorkflowError("NOT_FOUND", "需求不存在");
+    updateRequest: async (accountId, requestId, input) => {
+      if (accountId !== ownerAccountId || requestId !== current.id) throw new RequestWorkflowError("NOT_FOUND", "需求不存在");
       if (current.status === "CLOSED") throw new RequestWorkflowError("CONFLICT", "已关闭的需求不可编辑");
       current = {
         ...current,
@@ -76,14 +77,14 @@ function setup(initial = request()) {
       };
       return current;
     },
-    publishRequest: async (_accountId, requestId) => {
-      if (requestId !== current.id) throw new RequestWorkflowError("NOT_FOUND", "需求不存在");
+    publishRequest: async (accountId, requestId) => {
+      if (accountId !== ownerAccountId || requestId !== current.id) throw new RequestWorkflowError("NOT_FOUND", "需求不存在");
       if (current.status === "CLOSED") throw new RequestWorkflowError("CONFLICT", "已关闭的需求不可再次发布");
       current = { ...current, status: "PUBLISHED", publishedAt: new Date(), closedAt: null };
       return current;
     },
-    closeRequest: async (_accountId, requestId) => {
-      if (requestId !== current.id) throw new RequestWorkflowError("NOT_FOUND", "需求不存在");
+    closeRequest: async (accountId, requestId) => {
+      if (accountId !== ownerAccountId || requestId !== current.id) throw new RequestWorkflowError("NOT_FOUND", "需求不存在");
       current = { ...current, status: "CLOSED", publishedAt: null, closedAt: new Date() };
       return current;
     },
@@ -100,6 +101,30 @@ describe("parent request service", () => {
       fieldErrors: { budgetMinCents: expect.any(Array) },
     });
     await expect(service.createDraft(parentA, { teachingMode: "HOME" as never })).rejects.toMatchObject({ code: "INVALID_INPUT" });
+  });
+
+  it.each([
+    "体育东路一百一十八号",
+    "体育东路壹佰壹拾捌号",
+    "幸福弄",
+    "幸福路2栋",
+    "幸福路2单元",
+    "幸福路301室",
+    "幸福路301房",
+    "某某学校正门",
+    "020-12345678",
+    "138 0013 8000",
+    "138-0013-8000",
+  ])("rejects precise or contact-bearing public locations: %s", async (publicLocationNote) => {
+    const { service } = setup();
+    await expect(service.createDraft(parentA, { publicLocationNote })).rejects.toMatchObject({
+      code: "INVALID_INPUT", fieldErrors: { publicLocationNote: expect.any(Array) },
+    });
+  });
+
+  it.each(["体育西地铁站附近", "天河区商圈附近", "图书馆周边"])("allows approximate public locations: %s", async (publicLocationNote) => {
+    const { service } = setup();
+    await expect(service.createDraft(parentA, { publicLocationNote })).resolves.toMatchObject({ publicLocationNote });
   });
 
   it("strictly rejects ownership fields and duplicate or excessive subjects", async () => {
@@ -158,7 +183,7 @@ describe("parent request service", () => {
   it("rejects non-parent callers and preserves A/B ownership as repository-scoped account ids", async () => {
     const { service } = setup();
     await expect(service.listRequests({ ...parentA, role: "teacher" })).rejects.toMatchObject({ code: "FORBIDDEN" });
-    await expect(service.getRequest(parentB, ids.request)).resolves.toBeTruthy();
-    // The real repository treats the account id as the ownership boundary; service never accepts it from body.
+    await expect(service.getRequest(parentB, ids.request)).rejects.toMatchObject({ code: "NOT_FOUND" });
+    await expect(service.updateDraft(parentB, ids.request, completeInput())).rejects.toMatchObject({ code: "NOT_FOUND" });
   });
 });

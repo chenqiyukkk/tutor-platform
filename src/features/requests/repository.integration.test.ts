@@ -65,6 +65,50 @@ describe("Prisma parent request repository", () => {
     await expect(service.updateDraft(parentB, draft.id, complete)).rejects.toMatchObject({ code: "NOT_FOUND" });
     await expect(service.createDraft(parentA, { ...complete, studentId: studentB.id })).rejects.toMatchObject({ code: "INVALID_STUDENT" });
 
+    const inactiveStudent = await service.createStudent(parentA, { publicAlias: "停用学生", grade: "GRADE_6" });
+    await service.deactivateStudent(parentA, inactiveStudent.id);
+    await expect(service.createDraft(parentA, { ...complete, studentId: inactiveStudent.id })).rejects.toMatchObject({ code: "INVALID_STUDENT" });
+
+    const rollbackDraft = await service.createDraft(parentA, complete);
+    const beforeRollback = await repository.findRequest(parentA.id, rollbackDraft.id);
+    const rollbackFunction = `test_request_subject_rollback_${marker}`;
+    const rollbackTrigger = `test_request_subject_trigger_${marker}`;
+    await prisma.$executeRawUnsafe(`
+      CREATE FUNCTION "${rollbackFunction}"() RETURNS trigger LANGUAGE plpgsql AS $$
+      BEGIN
+        IF NEW."tutoringRequestId" = '${rollbackDraft.id}'::uuid THEN
+          RAISE EXCEPTION 'forced request subject replacement failure';
+        END IF;
+        RETURN NEW;
+      END $$;
+      CREATE TRIGGER "${rollbackTrigger}"
+      BEFORE INSERT ON "RequestSubject"
+      FOR EACH ROW EXECUTE FUNCTION "${rollbackFunction}"();
+    `);
+    try {
+      await expect(service.updateDraft(parentA, rollbackDraft.id, {
+        ...complete, subjectIds: [subjects[0].id], description: "不得部分写入",
+      })).rejects.toThrow("forced request subject replacement failure");
+      await expect(repository.findRequest(parentA.id, rollbackDraft.id)).resolves.toEqual(beforeRollback);
+    } finally {
+      await prisma.$executeRawUnsafe(`DROP TRIGGER IF EXISTS "${rollbackTrigger}" ON "RequestSubject"`);
+      await prisma.$executeRawUnsafe(`DROP FUNCTION IF EXISTS "${rollbackFunction}"()`);
+    }
+
+    const lockValidatedDraft = await service.createDraft(parentA, complete);
+    await prisma.subject.update({ where: { id: subjects[0].id }, data: { isActive: false } });
+    await expect(repository.publishRequest(parentA.id, lockValidatedDraft.id)).rejects.toMatchObject({ code: "INVALID_SUBJECT" });
+    await expect(repository.findRequest(parentA.id, lockValidatedDraft.id)).resolves.toMatchObject({ status: "DRAFT" });
+    await prisma.subject.update({ where: { id: subjects[0].id }, data: { isActive: true } });
+    await prisma.region.update({ where: { id: region.id }, data: { isActive: false } });
+    await expect(repository.publishRequest(parentA.id, lockValidatedDraft.id)).rejects.toMatchObject({ code: "INVALID_REGION" });
+    await expect(repository.findRequest(parentA.id, lockValidatedDraft.id)).resolves.toMatchObject({ status: "DRAFT" });
+    await prisma.region.update({ where: { id: region.id }, data: { isActive: true } });
+    await prisma.studentProfile.update({ where: { id: studentA.id }, data: { isActive: false } });
+    await expect(repository.publishRequest(parentA.id, lockValidatedDraft.id)).rejects.toMatchObject({ code: "INVALID_STUDENT" });
+    await expect(repository.findRequest(parentA.id, lockValidatedDraft.id)).resolves.toMatchObject({ status: "DRAFT" });
+    await prisma.studentProfile.update({ where: { id: studentA.id }, data: { isActive: true } });
+
     await expect(service.publish(parentA, draft.id)).resolves.toMatchObject({ status: "PUBLISHED", publishedAt: expect.any(Date) });
     await expect(service.updateDraft(parentA, draft.id, { ...complete, subjectIds: [subjects[0].id] })).resolves.toMatchObject({ status: "DRAFT", publishedAt: null });
     await expect(service.publish(parentA, draft.id)).resolves.toMatchObject({ status: "PUBLISHED" });
@@ -75,7 +119,9 @@ describe("Prisma parent request repository", () => {
     const before = await repository.listRequests(parentA.id);
     await prisma.subject.update({ where: { id: subjects[1].id }, data: { isActive: false } });
     await expect(service.createDraft(parentA, { ...complete, subjectIds: [subjects[1].id] })).rejects.toMatchObject({ code: "INVALID_SUBJECT" });
-    await expect(repository.listRequests(parentA.id)).resolves.toEqual(before);
+    const afterInvalidSubject = await repository.listRequests(parentA.id);
+    expect(afterInvalidSubject.map(({ id, status, budgetMinCents }) => ({ id, status, budgetMinCents })))
+      .toEqual(before.map(({ id, status, budgetMinCents }) => ({ id, status, budgetMinCents })));
     await prisma.subject.update({ where: { id: subjects[1].id }, data: { isActive: true } });
     await prisma.region.update({ where: { id: region.id }, data: { isActive: false } });
     await expect(service.createDraft(parentA, complete)).rejects.toMatchObject({ code: "INVALID_REGION" });

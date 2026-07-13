@@ -179,11 +179,11 @@ export class PrismaRequestRepository implements RequestRepository {
       current = await findOwnedRequest(transaction, accountId, id);
       if (!current) throw new RequestWorkflowError("NOT_FOUND", "需求不存在");
       const domain = toRequest(current);
+      if (current.studentProfileId && (!current.studentProfile || !current.studentProfile.isActive || current.studentProfile.parentProfileId !== current.parentProfileId)) throw new RequestWorkflowError("INVALID_STUDENT", "学生档案无效", { studentId: ["请选择自己的有效学生档案"] });
+      if (current.subjects.some(({ subject }) => !subject.isActive)) throw new RequestWorkflowError("INVALID_SUBJECT", "科目无效或已停用", { subjectIds: ["请选择有效且启用的科目"] });
+      if (current.regionId && (!current.region || !current.region.isActive || current.region.level !== 3)) throw new RequestWorkflowError("INVALID_REGION", "地区无效或已停用", { regionId: ["请选择有效且启用的区县"] });
       const errors = validatePublishable(domain);
       if (Object.keys(errors).length) throw new RequestWorkflowError("INCOMPLETE_REQUEST", "请完善需求后再发布", errors);
-      if (!current.studentProfile || !current.studentProfile.isActive || current.studentProfile.parentProfileId !== current.parentProfileId) throw new RequestWorkflowError("INVALID_STUDENT", "学生档案无效", { studentId: ["请选择自己的有效学生档案"] });
-      if (current.subjects.some(({ subject }) => !subject.isActive)) throw new RequestWorkflowError("INVALID_SUBJECT", "科目无效或已停用", { subjectIds: ["请选择有效且启用的科目"] });
-      if (!current.region || !current.region.isActive || current.region.level !== 3) throw new RequestWorkflowError("INVALID_REGION", "地区无效或已停用", { regionId: ["请选择有效且启用的区县"] });
       const row = await transaction.tutoringRequest.update({ where: { id }, data: { status: "PUBLISHED", publishedAt: new Date(), closedAt: null }, include: requestInclude });
       return toRequest(row);
     });

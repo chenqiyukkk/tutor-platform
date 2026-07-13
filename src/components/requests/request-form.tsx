@@ -20,6 +20,13 @@ type Props = {
 function yuan(cents: number | null) { return cents === null ? "" : String(cents / 100); }
 function cents(value: string) { return value.trim() === "" ? null : Math.round(Number(value) * 100); }
 
+class RequestApiError extends Error {
+  constructor(message: string, readonly fieldErrors: Record<string, string[]> = {}) {
+    super(message);
+    this.name = "RequestApiError";
+  }
+}
+
 export function RequestForm({ initialRequest, students, subjects, fetchRegions, fetcher = fetch }: Props) {
   const [request, setRequest] = useState(initialRequest);
   const [studentId, setStudentId] = useState(initialRequest?.studentProfileId ?? "");
@@ -56,8 +63,7 @@ export function RequestForm({ initialRequest, students, subjects, fetchRegions, 
   async function read(response: Response) {
     const body = await response.json();
     if (!response.ok) {
-      setErrors(body.fieldErrors ?? {});
-      throw new Error(body.error ?? "操作失败，请稍后重试");
+      throw new RequestApiError(body.error ?? "操作失败，请稍后重试", body.fieldErrors ?? {});
     }
     return body.request as TutoringRequestDto;
   }
@@ -70,36 +76,53 @@ export function RequestForm({ initialRequest, students, subjects, fetchRegions, 
     return read(response);
   }
 
-  async function mutate(operation: (signal: AbortSignal) => Promise<{ result: TutoringRequestDto; message: string }>) {
+  async function mutate(operation: (context: {
+    signal: AbortSignal;
+    commitRequest: (result: TutoringRequestDto) => void;
+  }) => Promise<{ result: TutoringRequestDto; message: string }>) {
     if (busy) return;
     controller.current?.abort();
     const nextController = new AbortController();
     controller.current = nextController;
     const currentSequence = ++sequence.current;
+    const isCurrent = () => sequence.current === currentSequence && !nextController.signal.aborted;
+    const commitRequest = (result: TutoringRequestDto) => {
+      if (!isCurrent()) return;
+      setRequest(result);
+      if (!initialRequest && result.id && window.location.pathname.endsWith("/new")) window.history.replaceState(null, "", `/parent/requests/${result.id}/edit`);
+    };
     setBusy(true); setNotice(null); setErrors({});
     try {
-      const { result, message } = await operation(nextController.signal);
-      if (sequence.current !== currentSequence) return;
-      setRequest(result); setNotice(message);
-      if (!initialRequest && result.id && window.location.pathname.endsWith("/new")) window.history.replaceState(null, "", `/parent/requests/${result.id}/edit`);
+      const { result, message } = await operation({ signal: nextController.signal, commitRequest });
+      if (!isCurrent()) return;
+      commitRequest(result); setNotice(message);
     } catch (error) {
-      if (sequence.current === currentSequence && !nextController.signal.aborted) setNotice(error instanceof Error ? error.message : "操作失败，请稍后重试");
+      if (isCurrent()) {
+        setErrors(error instanceof RequestApiError ? error.fieldErrors : {});
+        setNotice(error instanceof Error ? error.message : "操作失败，请稍后重试");
+      }
     } finally {
       if (sequence.current === currentSequence) setBusy(false);
     }
   }
 
-  async function saveDraft() { await mutate(async (signal) => ({ result: await save(signal), message: "草稿已保存" })); }
+  async function saveDraft() { await mutate(async ({ signal }) => ({ result: await save(signal), message: "草稿已保存" })); }
   async function publish() {
-    await mutate(async (signal) => {
+    await mutate(async ({ signal, commitRequest }) => {
       const draft = await save(signal);
-      const response = await fetcher(`/api/parent/requests/${draft.id}`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ action: "publish" }), signal });
-      return { result: await read(response), message: "需求已发布，教师现在可以看到它" };
+      commitRequest(draft);
+      try {
+        const response = await fetcher(`/api/parent/requests/${draft.id}`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ action: "publish" }), signal });
+        return { result: await read(response), message: "需求已发布，教师现在可以看到它" };
+      } catch (error) {
+        if (error instanceof RequestApiError) throw new RequestApiError(`草稿已保存但发布失败：${error.message}`, error.fieldErrors);
+        throw error;
+      }
     });
   }
   async function close() {
     if (!request?.id) return;
-    await mutate(async (signal) => {
+    await mutate(async ({ signal }) => {
       const response = await fetcher(`/api/parent/requests/${request.id}`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ action: "close" }), signal });
       return { result: await read(response), message: "需求已关闭" };
     });
@@ -115,8 +138,9 @@ export function RequestForm({ initialRequest, students, subjects, fetchRegions, 
           <FormField htmlFor="request-student" label="学生档案" required error={errors.studentId?.[0]}>
             <select disabled={busy || request?.status === "CLOSED"} value={studentId} onChange={(event) => setStudentId(event.target.value)}><option value="">请选择学生</option>{students.map((item) => <option key={item.id} value={item.id}>{item.publicAlias}</option>)}</select>
           </FormField>
-          <fieldset className="request-subjects"><legend>辅导科目（1–3 项）</legend>
+          <fieldset aria-describedby={errors.subjectIds ? "request-subjects-error" : undefined} aria-invalid={errors.subjectIds ? true : undefined} className="request-subjects"><legend>辅导科目（1–3 项）</legend>
             {subjects.length === 0 ? <p role="alert">暂无可选科目，请联系平台管理员启用科目后再创建需求。</p> : subjects.map((subject) => <label key={subject.id}><input checked={subjectIds.includes(subject.id)} disabled={busy || request?.status === "CLOSED" || (!subjectIds.includes(subject.id) && subjectIds.length >= 3)} type="checkbox" onChange={(event) => setSubjectIds(event.target.checked ? [...subjectIds, subject.id] : subjectIds.filter((id) => id !== subject.id))} /> <span>{subject.name}</span></label>)}
+            {errors.subjectIds ? <p id="request-subjects-error" role="alert">{errors.subjectIds[0]}</p> : null}
           </fieldset>
         </section>
         <section className="request-form-section">
@@ -130,7 +154,7 @@ export function RequestForm({ initialRequest, students, subjects, fetchRegions, 
           {regionName ? <p className="selected-region">当前区县：<strong>{regionName}</strong></p> : null}
           <RegionPicker disabled={busy || request?.status === "CLOSED"} {...(fetchRegions ? { fetchRegions } : {})} onChange={(id, district) => { setRegionId(id ?? ""); setRegionName(district?.name ?? ""); }} />
           {errors.regionId ? <p role="alert">{errors.regionId[0]}</p> : null}
-          <FormField htmlFor="request-location" label="大致位置" required hint="例如“天河公园附近”。不要填写门牌、学校全称、手机号或精确住址。" error={errors.publicLocationNote?.[0]}><input disabled={busy || request?.status === "CLOSED"} maxLength={100} value={location} onChange={(event) => setLocation(event.target.value)} /></FormField>
+          <FormField htmlFor="request-location" label="大致位置" required hint="例如“地铁站附近”或“某区商圈附近”。不要填写门牌、学校入口、手机号或精确住址；启发式拦截不能覆盖所有写法，请提交前人工检查。" error={errors.publicLocationNote?.[0]}><input disabled={busy || request?.status === "CLOSED"} maxLength={100} value={location} onChange={(event) => setLocation(event.target.value)} /></FormField>
           <FormField htmlFor="request-description" label="需求说明（可选）" error={errors.description?.[0]}><textarea disabled={busy || request?.status === "CLOSED"} maxLength={2000} rows={5} value={description} onChange={(event) => setDescription(event.target.value)} /></FormField>
         </section>
         {notice ? <p className="request-form-notice" role="status">{notice}</p> : null}
