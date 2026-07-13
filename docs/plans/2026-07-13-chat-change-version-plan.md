@@ -26,7 +26,7 @@ Replace timestamp/UUID message-change polling with a commit-order-safe `BIGINT` 
 
 - Render the block flow as native `<dialog>` synchronized with `showModal()`, `cancel`, and `close`; close through the dialog lifecycle and restore focus to the trigger.
 - Keep only the message list as the single `role="log"` / `aria-live` region.
-- Track the first-page continuation, loaded page count, and pagination revision. Once more than the first page is loaded, every load-more action rebuilds all loaded continuations from the latest first-page cursor before extending one page, even when the polled first-page items and boundary are byte-for-byte unchanged. This prevents an item moving into ranks 101–200 from being skipped.
+- Track the first-page continuation, loaded page count, and pagination revision. Once more than the first page is loaded, every load-more action rebuilds all loaded continuations from the latest first-page cursor before extending one page, even when the polled first-page items and boundary are byte-for-byte unchanged. Each visible poll also reconciles at most one already-opened deep page with an independent cursor/depth sweep, so a conversation moving between two sequential rebuild requests is recovered in bounded time without polling unopened pages.
 
 ## RED tests
 
@@ -34,7 +34,7 @@ Replace timestamp/UUID message-change polling with a commit-order-safe `BIGINT` 
 - Unit service test proves initial watermark allocation occurs after the pair lock and polling uses `changeVersion` only.
 - PostgreSQL integration tests cover same-millisecond/lower-UUID mutation, `limit=1` multi-page polling, delayed raw mutation versus initial watermark, and two raw same-pair transactions proving the second trigger blocks before sequence allocation until the first commits.
 - Schema and migration-upgrade tests require the 17th migration, `BIGINT`, sequence, trigger, canonical lock namespace/order, replacement index, and successful legacy upgrade.
-- Component tests require the native dialog lifecycle/focus restoration, a single live region, and multi-page conversation pagination rebuilt from the latest first-page waterline.
+- Component tests require the native dialog lifecycle/focus restoration, a single live region, multi-page conversation pagination rebuilt from the latest first-page waterline, and a bounded deep sweep protected from stale boundary/manual/realm/abort responses.
 
 ## Verification
 

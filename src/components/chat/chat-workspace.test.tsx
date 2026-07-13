@@ -236,7 +236,7 @@ describe("ChatWorkspace", () => {
     fireEvent.click(screen.getByRole("button", { name: "加载更多会话" }));
     await act(async () => { for (let pass = 0; pass < 8; pass += 1) await Promise.resolve(); });
 
-    expect(requestedCursors).toEqual(["old-page-2", "new-page-2", "new-page-3"]);
+    expect(requestedCursors).toEqual(["old-page-2", "new-page-2", "new-page-2", "new-page-3"]);
     expect(screen.getByRole("button", { name: /第150位家长/ })).toBeInTheDocument();
     expect(screen.getByRole("button", { name: /第201位家长/ })).toBeInTheDocument();
   });
@@ -285,9 +285,212 @@ describe("ChatWorkspace", () => {
     fireEvent.click(screen.getByRole("button", { name: "加载更多会话" }));
     await act(async () => { for (let pass = 0; pass < 8; pass += 1) await Promise.resolve(); });
 
-    expect(requestedCursors).toEqual(["c1", "c1", "c3"]);
+    expect(requestedCursors).toEqual(["c1", "c1", "c1", "c3"]);
     expect(screen.getByRole("button", { name: /第150位家长/ })).toBeInTheDocument();
     expect(screen.getByRole("button", { name: /第201位家长/ })).toBeInTheDocument();
+  });
+
+  it("reconciles a conversation that moves between sequential rebuild requests", async () => {
+    vi.useFakeTimers();
+    vi.spyOn(document, "visibilityState", "get").mockReturnValue("visible");
+    const firstPage = Array.from({ length: 100 }, (_, index) => numberedConversation(index + 1));
+    const oldSecondPage = Array.from({ length: 100 }, (_, index) => numberedConversation(index + 101));
+    const terminalThirdPage = Array.from({ length: 49 }, (_, index) => numberedConversation(index + 201));
+    const movedFromRank250To150 = {
+      ...numberedConversation(250),
+      activityAt: "2026-07-13T11:30:00.000Z",
+    };
+    let firstContinuationCalls = 0;
+    let movedBetweenRequests = false;
+    const requestedCursors: string[] = [];
+    const fetchMock = vi.fn<(input: RequestInfo | URL) => Promise<Response>>(async (input) => {
+      const url = String(input);
+      if (url === "/api/conversations?realm=teacher&limit=100") {
+        return conversationsResponse(firstPage, "c1");
+      }
+      const cursor = new URL(url, "http://test").searchParams.get("cursor");
+      if (cursor) requestedCursors.push(cursor);
+      if (cursor === "c1") {
+        firstContinuationCalls += 1;
+        return conversationsResponse(
+          movedBetweenRequests ? [...oldSecondPage.slice(0, 49), movedFromRank250To150, ...oldSecondPage.slice(50)] : oldSecondPage,
+          "c2",
+        );
+      }
+      if (cursor === "c2") {
+        expect(firstContinuationCalls).toBe(2);
+        movedBetweenRequests = true;
+        return conversationsResponse(terminalThirdPage);
+      }
+      if (url.includes("/messages?")) return messagesResponse([]);
+      return Response.json({ readCount: 0, readAt: "2026-07-13T12:01:00.000Z" });
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    render(<ChatWorkspace realm="teacher" />);
+    await act(async () => { for (let pass = 0; pass < 6; pass += 1) await Promise.resolve(); });
+    fireEvent.click(screen.getByRole("button", { name: "加载更多会话" }));
+    await act(async () => { for (let pass = 0; pass < 6; pass += 1) await Promise.resolve(); });
+    fireEvent.click(screen.getByRole("button", { name: "加载更多会话" }));
+    await act(async () => { for (let pass = 0; pass < 10; pass += 1) await Promise.resolve(); });
+
+    expect(requestedCursors).toEqual(["c1", "c1", "c2"]);
+    expect(screen.queryByRole("button", { name: /第250位家长/ })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "加载更多会话" })).not.toBeInTheDocument();
+
+    await act(async () => { await vi.advanceTimersByTimeAsync(2_000); });
+
+    expect(requestedCursors).toEqual(["c1", "c1", "c2", "c1"]);
+    expect(screen.getByRole("button", { name: /第250位家长/ })).toBeInTheDocument();
+  });
+
+  it("sweeps only user-opened conversation depth without requesting the next unopened page", async () => {
+    vi.useFakeTimers();
+    vi.spyOn(document, "visibilityState", "get").mockReturnValue("visible");
+    const requestedCursors: string[] = [];
+    const fetchMock = vi.fn<(input: RequestInfo | URL) => Promise<Response>>(async (input) => {
+      const url = String(input);
+      if (url === "/api/conversations?realm=teacher&limit=100") {
+        return conversationsResponse([conversationA], "c1");
+      }
+      const cursor = new URL(url, "http://test").searchParams.get("cursor");
+      if (cursor) requestedCursors.push(cursor);
+      if (cursor === "c1") return conversationsResponse([numberedConversation(101)], "c2");
+      if (cursor === "c2") return conversationsResponse([numberedConversation(201)], "c3");
+      if (cursor === "c3") return conversationsResponse([numberedConversation(301)]);
+      if (url.includes("/messages?")) return messagesResponse([]);
+      return Response.json({ readCount: 0, readAt: "2026-07-13T12:01:00.000Z" });
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    render(<ChatWorkspace realm="teacher" />);
+    await act(async () => { for (let pass = 0; pass < 6; pass += 1) await Promise.resolve(); });
+    fireEvent.click(screen.getByRole("button", { name: "加载更多会话" }));
+    await act(async () => { for (let pass = 0; pass < 6; pass += 1) await Promise.resolve(); });
+    fireEvent.click(screen.getByRole("button", { name: "加载更多会话" }));
+    await act(async () => { for (let pass = 0; pass < 8; pass += 1) await Promise.resolve(); });
+    expect(requestedCursors).toEqual(["c1", "c1", "c2"]);
+    expect(screen.getByRole("button", { name: "加载更多会话" })).toBeInTheDocument();
+
+    await act(async () => { await vi.advanceTimersByTimeAsync(2_000); });
+    await act(async () => { await vi.advanceTimersByTimeAsync(2_000); });
+
+    expect(requestedCursors).toEqual(["c1", "c1", "c2", "c1", "c2"]);
+    await act(async () => { await vi.advanceTimersByTimeAsync(4_000); });
+    expect(requestedCursors).not.toContain("c3");
+    expect(screen.queryByRole("button", { name: /第301位家长/ })).not.toBeInTheDocument();
+  });
+
+  it("resets a deep sweep at a new boundary and ignores its aborted stale response", async () => {
+    vi.useFakeTimers();
+    let visibility: DocumentVisibilityState = "visible";
+    vi.spyOn(document, "visibilityState", "get").mockImplementation(() => visibility);
+    const staleDeep = deferred<Response>();
+    const staleItem = numberedConversation(180);
+    const freshItem = numberedConversation(181);
+    const freshThirdPageItem = numberedConversation(281);
+    let firstPageCalls = 0;
+    let oldFirstContinuationCalls = 0;
+    let staleSignal: AbortSignal | undefined;
+    const requestedCursors: string[] = [];
+    const fetchMock = vi.fn<(input: RequestInfo | URL, init?: RequestInit) => Promise<Response>>(async (input, init) => {
+      const url = String(input);
+      if (url === "/api/conversations?realm=teacher&limit=100") {
+        firstPageCalls += 1;
+        return conversationsResponse([conversationA], firstPageCalls <= 2 ? "old-c1" : "new-c1");
+      }
+      const cursor = new URL(url, "http://test").searchParams.get("cursor");
+      if (cursor) requestedCursors.push(cursor);
+      if (cursor === "old-c1") {
+        oldFirstContinuationCalls += 1;
+        if (oldFirstContinuationCalls === 3) {
+          staleSignal = init?.signal ?? undefined;
+          return staleDeep.promise;
+        }
+        return conversationsResponse([numberedConversation(101)], "old-c2");
+      }
+      if (cursor === "old-c2") return conversationsResponse([numberedConversation(201)], "old-c3");
+      if (cursor === "new-c1") return conversationsResponse([freshItem], "new-c2");
+      if (cursor === "new-c2") return conversationsResponse([freshThirdPageItem], "new-c3");
+      if (url.includes("/messages?")) return messagesResponse([]);
+      return Response.json({ readCount: 0, readAt: "2026-07-13T12:01:00.000Z" });
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    render(<ChatWorkspace realm="teacher" />);
+    await act(async () => { for (let pass = 0; pass < 6; pass += 1) await Promise.resolve(); });
+    fireEvent.click(screen.getByRole("button", { name: "加载更多会话" }));
+    await act(async () => { for (let pass = 0; pass < 6; pass += 1) await Promise.resolve(); });
+    fireEvent.click(screen.getByRole("button", { name: "加载更多会话" }));
+    await act(async () => { for (let pass = 0; pass < 8; pass += 1) await Promise.resolve(); });
+
+    await act(async () => { await vi.advanceTimersByTimeAsync(2_000); });
+    expect(staleSignal).toBeDefined();
+    visibility = "hidden";
+    act(() => document.dispatchEvent(new Event("visibilitychange")));
+    expect(staleSignal?.aborted).toBe(true);
+    visibility = "visible";
+    act(() => document.dispatchEvent(new Event("visibilitychange")));
+    await act(async () => { for (let pass = 0; pass < 8; pass += 1) await Promise.resolve(); });
+
+    expect(requestedCursors.at(-1)).toBe("new-c1");
+    expect(screen.getByRole("button", { name: /第181位家长/ })).toBeInTheDocument();
+    staleDeep.resolve(conversationsResponse([staleItem], "stale-c2"));
+    await act(async () => { for (let pass = 0; pass < 6; pass += 1) await Promise.resolve(); });
+    expect(screen.queryByRole("button", { name: /第180位家长/ })).not.toBeInTheDocument();
+
+    await act(async () => { await vi.advanceTimersByTimeAsync(2_000); });
+    expect(requestedCursors.at(-1)).toBe("new-c2");
+    expect(screen.getByRole("button", { name: /第281位家长/ })).toBeInTheDocument();
+  });
+
+  it("ignores a deep sweep response superseded by a successful manual rebuild", async () => {
+    vi.useFakeTimers();
+    vi.spyOn(document, "visibilityState", "get").mockReturnValue("visible");
+    const staleDeep = deferred<Response>();
+    const staleItem = numberedConversation(190);
+    const refreshedSecondPageItem = numberedConversation(191);
+    const refreshedThirdPageItem = numberedConversation(291);
+    let firstContinuationCalls = 0;
+    const requestedCursors: string[] = [];
+    const fetchMock = vi.fn<(input: RequestInfo | URL) => Promise<Response>>(async (input) => {
+      const url = String(input);
+      if (url === "/api/conversations?realm=teacher&limit=100") {
+        return conversationsResponse([conversationA], "c1");
+      }
+      const cursor = new URL(url, "http://test").searchParams.get("cursor");
+      if (cursor) requestedCursors.push(cursor);
+      if (cursor === "c1") {
+        firstContinuationCalls += 1;
+        if (firstContinuationCalls === 2) return staleDeep.promise;
+        if (firstContinuationCalls >= 3) return conversationsResponse([refreshedSecondPageItem], "new-c2");
+        return conversationsResponse([numberedConversation(101)], "old-c2");
+      }
+      if (cursor === "new-c2") return conversationsResponse([refreshedThirdPageItem], "new-c3");
+      if (cursor === "old-c2") return conversationsResponse([numberedConversation(201)], "old-c3");
+      if (url.includes("/messages?")) return messagesResponse([]);
+      return Response.json({ readCount: 0, readAt: "2026-07-13T12:01:00.000Z" });
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    render(<ChatWorkspace realm="teacher" />);
+    await act(async () => { for (let pass = 0; pass < 6; pass += 1) await Promise.resolve(); });
+    fireEvent.click(screen.getByRole("button", { name: "加载更多会话" }));
+    await act(async () => { for (let pass = 0; pass < 6; pass += 1) await Promise.resolve(); });
+    await act(async () => { await vi.advanceTimersByTimeAsync(2_000); });
+    expect(firstContinuationCalls).toBe(2);
+
+    fireEvent.click(screen.getByRole("button", { name: "加载更多会话" }));
+    await act(async () => { for (let pass = 0; pass < 8; pass += 1) await Promise.resolve(); });
+    expect(screen.getByRole("button", { name: /第191位家长/ })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /第291位家长/ })).toBeInTheDocument();
+
+    staleDeep.resolve(conversationsResponse([staleItem], "stale-c2"));
+    await act(async () => { for (let pass = 0; pass < 6; pass += 1) await Promise.resolve(); });
+    expect(screen.queryByRole("button", { name: /第190位家长/ })).not.toBeInTheDocument();
+
+    await act(async () => { await vi.advanceTimersByTimeAsync(2_000); });
+    expect(requestedCursors.at(-1)).toBe("c1");
   });
 
   it("aborts and ignores a stale conversation page when the realm changes", async () => {
@@ -321,6 +524,55 @@ describe("ChatWorkspace", () => {
     stalePage.resolve(conversationsResponse([staleConversation]));
     await act(async () => { await Promise.resolve(); });
     expect(screen.queryByRole("button", { name: /第102位家长/ })).not.toBeInTheDocument();
+  });
+
+  it("aborts and ignores a stale deep sweep response after the realm changes", async () => {
+    vi.useFakeTimers();
+    vi.spyOn(document, "visibilityState", "get").mockReturnValue("visible");
+    const staleDeep = deferred<Response>();
+    const staleConversation = numberedConversation(199);
+    let teacherFirstPageCalls = 0;
+    let continuationCalls = 0;
+    let staleSignal: AbortSignal | undefined;
+    const fetchMock = vi.fn<(input: RequestInfo | URL, init?: RequestInit) => Promise<Response>>(async (input, init) => {
+      const url = String(input);
+      if (url === "/api/conversations?realm=teacher&limit=100") {
+        teacherFirstPageCalls += 1;
+        return conversationsResponse([conversationA], "teacher-c1");
+      }
+      if (url.includes("realm=teacher") && url.includes("cursor=teacher-c1")) {
+        continuationCalls += 1;
+        if (continuationCalls === 2) {
+          staleSignal = init?.signal ?? undefined;
+          return staleDeep.promise;
+        }
+        return conversationsResponse([numberedConversation(101)], "teacher-c2");
+      }
+      if (url === "/api/conversations?realm=parent&limit=100") {
+        return conversationsResponse([conversationB]);
+      }
+      if (url.includes("/messages?")) return messagesResponse([]);
+      return Response.json({ readCount: 0, readAt: "2026-07-13T12:01:00.000Z" });
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    const view = render(<ChatWorkspace realm="teacher" />);
+    await act(async () => { for (let pass = 0; pass < 6; pass += 1) await Promise.resolve(); });
+    fireEvent.click(screen.getByRole("button", { name: "加载更多会话" }));
+    await act(async () => { for (let pass = 0; pass < 6; pass += 1) await Promise.resolve(); });
+    await act(async () => { await vi.advanceTimersByTimeAsync(2_000); });
+    expect(teacherFirstPageCalls).toBe(2);
+    expect(staleSignal).toBeDefined();
+
+    view.rerender(<ChatWorkspace realm="parent" />);
+    expect(staleSignal?.aborted).toBe(true);
+    await act(async () => { for (let pass = 0; pass < 6; pass += 1) await Promise.resolve(); });
+    expect(screen.getByRole("button", { name: /李家长/ })).toBeInTheDocument();
+    staleDeep.resolve(conversationsResponse([staleConversation], "teacher-stale-c2"));
+    await act(async () => { for (let pass = 0; pass < 6; pass += 1) await Promise.resolve(); });
+
+    expect(screen.queryByRole("button", { name: /第199位家长/ })).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /李家长/ })).toBeInTheDocument();
   });
 
   it("marks only unread counterpart ids returned by each initial and older page", async () => {

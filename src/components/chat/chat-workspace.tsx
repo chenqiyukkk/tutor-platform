@@ -86,6 +86,8 @@ export function ChatWorkspace({ realm }: { realm: ChatRealm }) {
   const conversationGeneration = useRef(0);
   const conversationFirstPageCursor = useRef<string | null>(null);
   const conversationLoadedPageCount = useRef(1);
+  const conversationSweepCursor = useRef<string | null>(null);
+  const conversationSweepDepth = useRef(1);
   const conversationPaginationRevision = useRef(0);
   const conversationPageController = useRef<AbortController | null>(null);
   const threadGeneration = useRef(0);
@@ -107,6 +109,8 @@ export function ChatWorkspace({ realm }: { realm: ChatRealm }) {
     const generation = ++conversationGeneration.current;
     conversationPageController.current?.abort();
     conversationLoadedPageCount.current = 1;
+    conversationSweepCursor.current = null;
+    conversationSweepDepth.current = 1;
     conversationPaginationRevision.current += 1;
     const controller = new AbortController();
     void fetch(`/api/conversations?realm=${realm}&limit=100`, {
@@ -116,6 +120,7 @@ export function ChatWorkspace({ realm }: { realm: ChatRealm }) {
       if (generation !== conversationGeneration.current) return;
       const sorted = sortConversations(page.items);
       conversationFirstPageCursor.current = page.nextCursor;
+      conversationSweepCursor.current = page.nextCursor;
       setConversations(sorted);
       setConversationNextCursor(page.nextCursor);
       setLoadingMoreConversations(false);
@@ -142,7 +147,7 @@ export function ChatWorkspace({ realm }: { realm: ChatRealm }) {
     const generation = conversationGeneration.current;
     const response = await fetch(`/api/conversations?realm=${realm}&limit=100`, { cache: "no-store", signal });
     const page = await responseJson<ConversationPage>(response);
-    if (generation !== conversationGeneration.current) return { hasMore: false };
+    if (signal.aborted || generation !== conversationGeneration.current) return { hasMore: false };
     setConversations((current) => mergeConversations(current, page.items));
     const boundaryChanged = conversationFirstPageCursor.current !== page.nextCursor;
     conversationFirstPageCursor.current = page.nextCursor;
@@ -151,6 +156,35 @@ export function ChatWorkspace({ realm }: { realm: ChatRealm }) {
     } else if (boundaryChanged) {
       conversationPaginationRevision.current += 1;
       setConversationNextCursor(page.nextCursor);
+    }
+    if (boundaryChanged) {
+      conversationSweepCursor.current = page.nextCursor;
+      conversationSweepDepth.current = 1;
+    }
+    const loadedPageCount = conversationLoadedPageCount.current;
+    const sweepCursor = conversationSweepCursor.current;
+    const sweepDepth = conversationSweepDepth.current;
+    if (loadedPageCount > 1 && sweepCursor && sweepDepth < loadedPageCount) {
+      const revision = conversationPaginationRevision.current;
+      const deepResponse = await fetch(
+        `/api/conversations?realm=${realm}&limit=100&cursor=${encodeURIComponent(sweepCursor)}`,
+        { cache: "no-store", signal },
+      );
+      const deepPage = await responseJson<ConversationPage>(deepResponse);
+      if (
+        signal.aborted
+        || generation !== conversationGeneration.current
+        || revision !== conversationPaginationRevision.current
+      ) return { hasMore: false };
+      setConversations((current) => mergeConversations(current, deepPage.items));
+      const nextDepth = sweepDepth + 1;
+      if (!deepPage.nextCursor || nextDepth >= conversationLoadedPageCount.current) {
+        conversationSweepCursor.current = conversationFirstPageCursor.current;
+        conversationSweepDepth.current = 1;
+      } else {
+        conversationSweepCursor.current = deepPage.nextCursor;
+        conversationSweepDepth.current = nextDepth;
+      }
     }
     return { hasMore: false };
   }, [realm]);
@@ -345,7 +379,10 @@ export function ChatWorkspace({ realm }: { realm: ChatRealm }) {
       ) return;
       // This count and next cursor describe only the freshly traversed chain. The ID merge
       // intentionally preserves known conversations and the current selection.
+      conversationPaginationRevision.current += 1;
       conversationLoadedPageCount.current = loadedPageCount;
+      conversationSweepCursor.current = conversationFirstPageCursor.current;
+      conversationSweepDepth.current = 1;
       setConversations((current) => mergeConversations(current, incoming));
       setConversationNextCursor(nextCursor);
     } catch (error) {

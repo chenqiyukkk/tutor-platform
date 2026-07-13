@@ -4,7 +4,7 @@
 
 **Goal:** Eliminate stale deep conversation cursors and the migration 13800 table-lock/advisory-lock deadlock while preserving commit-ordered message changes.
 
-**Architecture:** Treat every explicit load-more after page 2 as a cursor-chain rebuild from the latest first-page cursor; polling only marks/updates first-page state and never auto-fetches deep pages. Keep migration 13800 atomic, but backfill versions directly before installing the pair-locking trigger so a transaction holding `Message` AccessExclusive never waits on an application pair lock.
+**Architecture:** Treat every explicit load-more after page 2 as a cursor-chain rebuild from the latest first-page cursor. A later bounded-reconciliation follow-up adds at most one already-opened deep-page request per visible poll, using state independent from manual pagination. Keep migration 13800 atomic, but backfill versions directly before installing the pair-locking trigger so a transaction holding `Message` AccessExclusive never waits on an application pair lock.
 
 **Tech Stack:** React 19, Vitest/Testing Library, PostgreSQL `pg`, Prisma 7 migrations, TypeScript.
 
@@ -28,7 +28,7 @@ Expected: FAIL because the current implementation requests stale `c2` directly w
 
 **Step 3: Implement the minimal pagination rule**
 
-When more than one page is already loaded, every explicit load-more action starts at `conversationFirstPageCursor` and walks through `targetPageCount - 1` pages. Keep generation/revision/AbortController checks; do not fetch deep pages from the polling callback.
+When more than one page is already loaded, every explicit load-more action starts at `conversationFirstPageCursor` and walks through `targetPageCount - 1` pages. Keep generation/revision/AbortController checks. The later deep-sweep follow-up may reconcile one already-opened deep page per poll but must not mutate this manual cursor chain.
 
 **Step 4: Run the component suite and verify GREEN**
 
