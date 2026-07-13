@@ -50,11 +50,53 @@ describe("favorites against PostgreSQL", () => {
     const first = await service.add({ id: parentId, role: "parent" }, { targetType: "teacher", targetId: profileId });
     const second = await service.add({ id: parentId, role: "parent" }, { targetType: "teacher", targetId: profileId });
     expect(second.id).toBe(first.id);
+    await expect(service.has({ id: parentId, role: "parent" }, { targetType: "teacher", targetId: profileId })).resolves.toBe(true);
     await expect(service.add({ id: teacherId, role: "teacher" }, { targetType: "teacher", targetId: profileId })).rejects.toMatchObject({ code: "FORBIDDEN" });
     expect(JSON.stringify(await service.list({ id: parentId, role: "parent" }))).not.toMatch(/email|username|password|evidence/i);
     await service.remove({ id: parentId, role: "parent" }, { targetType: "teacher", targetId: profileId });
+    await expect(service.has({ id: parentId, role: "parent" }, { targetType: "teacher", targetId: profileId })).resolves.toBe(false);
     await service.remove({ id: parentId, role: "parent" }, { targetType: "teacher", targetId: profileId });
   });
+
+  it.each(["target", "subject", "region", "target-account", "actor-account"] as const)(
+    "does not save a teacher favorite when %s is concurrently deactivated",
+    async (kind) => {
+      const url = new URL(process.env.DATABASE_URL!);
+      url.searchParams.set("options", "-c lock_timeout=2000ms -c statement_timeout=5000ms");
+      const limited = new PrismaClient({ adapter: new PrismaPg({ connectionString: url.toString() }) });
+      const service = createFavoriteService(limited);
+      let unlock!: () => void;
+      let markLocked!: () => void;
+      const release = new Promise<void>((resolve) => { unlock = resolve; });
+      const locked = new Promise<void>((resolve) => { markLocked = resolve; });
+      const deactivation = prisma.$transaction(async (transaction) => {
+        if (kind === "target") await transaction.teacherProfile.update({ where: { id: profileId }, data: { status: "DRAFT", publishedAt: null } });
+        if (kind === "subject") await transaction.subject.update({ where: { id: subjectIds[0] }, data: { isActive: false } });
+        if (kind === "region") await transaction.region.update({ where: { id: regionIds[0] }, data: { isActive: false } });
+        if (kind === "target-account") await transaction.account.update({ where: { id: teacherId }, data: { status: "DISABLED" } });
+        if (kind === "actor-account") await transaction.account.update({ where: { id: parentId }, data: { status: "DISABLED" } });
+        markLocked();
+        await release;
+      });
+      try {
+        await locked;
+        const adding = service.add({ id: parentId, role: "parent" }, { targetType: "teacher", targetId: profileId });
+        unlock();
+        await deactivation;
+        await expect(adding).rejects.toMatchObject({ code: kind === "actor-account" ? "UNAUTHORIZED" : "INVALID_TARGET" });
+        await expect(prisma.favorite.count({ where: { ownerAccountId: parentId, teacherProfileId: profileId } })).resolves.toBe(0);
+      } finally {
+        unlock();
+        await deactivation.catch(() => undefined);
+        await limited.$disconnect();
+        if (kind === "target") await prisma.teacherProfile.update({ where: { id: profileId }, data: { status: "PUBLISHED", publishedAt: new Date() } });
+        if (kind === "subject") await prisma.subject.update({ where: { id: subjectIds[0] }, data: { isActive: true } });
+        if (kind === "region") await prisma.region.update({ where: { id: regionIds[0] }, data: { isActive: true } });
+        if (kind === "target-account") await prisma.account.update({ where: { id: teacherId }, data: { status: "ACTIVE" } });
+        if (kind === "actor-account") await prisma.account.update({ where: { id: parentId }, data: { status: "ACTIVE" } });
+      }
+    },
+  );
 
   it("allows only teacher→public request and rejects stale targets", async () => {
     const service = createFavoriteService(prisma);
@@ -62,6 +104,21 @@ describe("favorites against PostgreSQL", () => {
     await expect(service.add({ id: parentId, role: "parent" }, { targetType: "request", targetId: requestId })).rejects.toMatchObject({ code: "FORBIDDEN" });
     await prisma.tutoringRequest.update({ where: { id: requestId }, data: { status: "DRAFT", publishedAt: null } });
     await expect(service.add({ id: teacherId, role: "teacher" }, { targetType: "request", targetId: requestId })).rejects.toMatchObject({ code: "INVALID_TARGET" });
+  });
+
+  it("enforces exactly one favorite target for raw database writes", async () => {
+    await expect(prisma.$executeRaw`
+      INSERT INTO "Favorite" ("id", "ownerAccountId", "teacherProfileId", "tutoringRequestId")
+      VALUES (${crypto.randomUUID()}::uuid, ${parentId}::uuid, ${profileId}::uuid, ${requestId}::uuid)
+    `).rejects.toMatchObject({ meta: expect.objectContaining({ driverAdapterError: expect.anything() }) });
+    await expect(prisma.$executeRaw`
+      INSERT INTO "Favorite" ("id", "ownerAccountId", "teacherProfileId", "tutoringRequestId")
+      VALUES (${crypto.randomUUID()}::uuid, ${parentId}::uuid, NULL, NULL)
+    `).rejects.toMatchObject({ meta: expect.objectContaining({ driverAdapterError: expect.anything() }) });
+    await expect(prisma.favorite.count({ where: { ownerAccountId: parentId, OR: [
+      { teacherProfileId: profileId, tutoringRequestId: requestId },
+      { teacherProfileId: null, tutoringRequestId: null },
+    ] } })).resolves.toBe(0);
   });
 });
 

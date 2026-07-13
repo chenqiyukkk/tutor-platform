@@ -77,17 +77,57 @@ export function createFavoriteService(prisma: PrismaClient, now: () => Date = ()
     }
   }
 
+  async function lockTargetContext(
+    transaction: Prisma.TransactionClient,
+    actor: Actor,
+    target: z.infer<typeof favoriteTargetSchema>,
+  ) {
+    // Degenerate forms of the Task 12 global order. Teacher favorites use
+    // Profile -> Subjects -> Regions -> Accounts; request favorites use
+    // Request -> Subjects -> Region -> Student -> Parent -> Accounts.
+    if (target.targetType === "teacher") {
+      await transaction.$queryRaw`SELECT "id" FROM "TeacherProfile" WHERE "id" = ${target.targetId}::uuid FOR SHARE`;
+      const profile = await transaction.teacherProfile.findUnique({ where: { id: target.targetId }, select: { accountId: true } });
+      if (!profile) throw new FavoriteWorkflowError("INVALID_TARGET", "老师资料当前不可收藏");
+      const subjectIds = (await transaction.teacherSubject.findMany({ where: { teacherProfileId: target.targetId }, select: { subjectId: true }, orderBy: { subjectId: "asc" } })).map(({ subjectId }) => subjectId);
+      if (subjectIds.length) await transaction.$queryRaw`SELECT "id" FROM "Subject" WHERE "id" IN (${Prisma.join(subjectIds)}) ORDER BY "id" FOR SHARE`;
+      const regionIds = (await transaction.teacherServiceArea.findMany({ where: { teacherProfileId: target.targetId }, select: { regionId: true }, orderBy: { regionId: "asc" } })).map(({ regionId }) => regionId);
+      if (regionIds.length) await transaction.$queryRaw`SELECT "id" FROM "Region" WHERE "id" IN (${Prisma.join(regionIds)}) ORDER BY "id" FOR SHARE`;
+      const accountIds = [...new Set([actor.id, profile.accountId])].sort();
+      await transaction.$queryRaw`SELECT "id" FROM "Account" WHERE "id" IN (${Prisma.join(accountIds)}) ORDER BY "id" FOR SHARE`;
+      return;
+    }
+
+    await transaction.$queryRaw`SELECT "id" FROM "TutoringRequest" WHERE "id" = ${target.targetId}::uuid FOR SHARE`;
+    const request = await transaction.tutoringRequest.findUnique({ where: { id: target.targetId }, select: { parentProfileId: true, studentProfileId: true, regionId: true } });
+    if (!request) throw new FavoriteWorkflowError("INVALID_TARGET", "家教需求当前不可收藏");
+    const subjectIds = (await transaction.requestSubject.findMany({ where: { tutoringRequestId: target.targetId }, select: { subjectId: true }, orderBy: { subjectId: "asc" } })).map(({ subjectId }) => subjectId);
+    if (subjectIds.length) await transaction.$queryRaw`SELECT "id" FROM "Subject" WHERE "id" IN (${Prisma.join(subjectIds)}) ORDER BY "id" FOR SHARE`;
+    if (request.regionId) await transaction.$queryRaw`SELECT "id" FROM "Region" WHERE "id" = ${request.regionId}::uuid FOR SHARE`;
+    if (request.studentProfileId) await transaction.$queryRaw`SELECT "id" FROM "StudentProfile" WHERE "id" = ${request.studentProfileId}::uuid FOR SHARE`;
+    await transaction.$queryRaw`SELECT "id" FROM "ParentProfile" WHERE "id" = ${request.parentProfileId}::uuid FOR SHARE`;
+    const parent = await transaction.parentProfile.findUnique({ where: { id: request.parentProfileId }, select: { accountId: true } });
+    if (!parent) throw new FavoriteWorkflowError("INVALID_TARGET", "家教需求当前不可收藏");
+    const accountIds = [...new Set([actor.id, parent.accountId])].sort();
+    await transaction.$queryRaw`SELECT "id" FROM "Account" WHERE "id" IN (${Prisma.join(accountIds)}) ORDER BY "id" FOR SHARE`;
+  }
+
   return {
+    async has(actor: Actor, rawTarget: unknown) {
+      const target = favoriteTargetSchema.parse(rawTarget);
+      await assertActor(actor);
+      assertTargetRole(actor, target.targetType);
+      return (await prisma.favorite.count({ where: {
+        ownerAccountId: actor.id,
+        ...(target.targetType === "teacher" ? { teacherProfileId: target.targetId } : { tutoringRequestId: target.targetId }),
+      } })) > 0;
+    },
+
     async add(actor: Actor, rawTarget: unknown) {
       const target = favoriteTargetSchema.parse(rawTarget);
       await assertActor(actor);
       return prisma.$transaction(async (transaction) => {
-        await transaction.$queryRaw`SELECT "id" FROM "Account" WHERE "id" = ${actor.id}::uuid FOR SHARE`;
-        if (target.targetType === "teacher") {
-          await transaction.$queryRaw`SELECT "id" FROM "TeacherProfile" WHERE "id" = ${target.targetId}::uuid FOR SHARE`;
-        } else {
-          await transaction.$queryRaw`SELECT "id" FROM "TutoringRequest" WHERE "id" = ${target.targetId}::uuid FOR SHARE`;
-        }
+        await lockTargetContext(transaction, actor, target);
         await assertActor(actor, transaction);
         await assertTarget(actor, target, transaction);
         const row = target.targetType === "teacher"

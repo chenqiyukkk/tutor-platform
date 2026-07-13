@@ -24,6 +24,49 @@ describe("greeting workflow against PostgreSQL", () => {
   let teacherProfileId = "";
   let requestId = "";
 
+  async function isolatedScenario(label: string) {
+    const suffix = crypto.randomUUID().slice(0, 8);
+    const parent = await account("PARENT", `${label}-parent-${suffix}`);
+    const teacher = await account("TEACHER", `${label}-teacher-${suffix}`);
+    const region = await prisma.region.create({ data: { code: `G${crypto.randomUUID().replaceAll("-", "").slice(0, 11)}`, name: `${label}区`, level: 3 } });
+    regionIds.push(region.id);
+    const subject = await prisma.subject.create({ data: { slug: `g-${crypto.randomUUID()}`, name: `${label}科目` } });
+    subjectIds.push(subject.id);
+    const parentProfile = await prisma.parentProfile.create({ data: { accountId: parent.id, displayName: `${label}家长`, status: "PUBLISHED" } });
+    const student = await prisma.studentProfile.create({ data: { parentProfileId: parentProfile.id, displayName: `${label}学生`, gradeLevel: "GRADE_8" } });
+    const teacherProfile = await prisma.teacherProfile.create({ data: {
+      accountId: teacher.id, displayName: `${label}老师`, identityType: "FULL_TIME_TEACHER", headline: "并发边界",
+      bio: "安全流程测试", yearsExperience: 3, hourlyRate: 80, hourlyRateMax: 120, isOnline: true,
+      status: "PUBLISHED", publishedAt: new Date("2026-07-01T00:00:00.000Z"),
+    } });
+    await prisma.teacherSubject.create({ data: { teacherProfileId: teacherProfile.id, subjectId: subject.id } });
+    await prisma.teacherServiceArea.create({ data: { teacherProfileId: teacherProfile.id, regionId: region.id, isPrimary: true } });
+    const request = await prisma.tutoringRequest.create({ data: {
+      parentProfileId: parentProfile.id, studentProfileId: student.id, regionId: region.id, title: `${label}需求`,
+      description: "安全流程测试", budgetMin: 1, budgetMax: 2, teachingMode: "BOTH", status: "PUBLISHED",
+      publishedAt: new Date("2026-07-01T00:00:00.000Z"), expiresAt: new Date("2027-01-01T00:00:00.000Z"),
+    } });
+    await prisma.requestSubject.create({ data: { tutoringRequestId: request.id, subjectId: subject.id } });
+    const service = createGreetingService(prisma, () => new Date("2026-07-13T12:00:00.000Z"));
+    const greeting = await service.send({ id: teacher.id, role: "teacher" }, { targetId: request.id, requestId: request.id, note: "" });
+    return { service, greeting, parent, teacher, parentProfile, student, teacherProfile, request, subject, region };
+  }
+
+  async function invalidateScenario(
+    scenario: Awaited<ReturnType<typeof isolatedScenario>>,
+    invalidation: Invalidation,
+  ) {
+    if (invalidation === "profile-missing") await prisma.teacherProfile.delete({ where: { id: scenario.teacherProfile.id } });
+    if (invalidation === "profile-unpublished") await prisma.teacherProfile.update({ where: { id: scenario.teacherProfile.id }, data: { status: "DRAFT", publishedAt: null } });
+    if (invalidation === "profile-headline-missing") await prisma.teacherProfile.update({ where: { id: scenario.teacherProfile.id }, data: { headline: null } });
+    if (invalidation === "request-unpublished") await prisma.tutoringRequest.update({ where: { id: scenario.request.id }, data: { status: "DRAFT", publishedAt: null } });
+    if (invalidation === "request-mode-missing") await prisma.tutoringRequest.update({ where: { id: scenario.request.id }, data: { teachingMode: null } });
+    if (invalidation === "student-inactive") await prisma.studentProfile.update({ where: { id: scenario.student.id }, data: { isActive: false } });
+    if (invalidation === "subject-inactive") await prisma.subject.update({ where: { id: scenario.subject.id }, data: { isActive: false } });
+    if (invalidation === "region-inactive") await prisma.region.update({ where: { id: scenario.region.id }, data: { isActive: false } });
+    if (invalidation === "sender-account-disabled") await prisma.account.update({ where: { id: scenario.teacher.id }, data: { status: "DISABLED" } });
+  }
+
   async function account(role: "PARENT" | "TEACHER", label: string) {
     const row = await prisma.account.create({ data: {
       role, username: `${label}-${marker}`, normalizedUsername: `${label}-${marker}`,
@@ -45,6 +88,11 @@ describe("greeting workflow against PostgreSQL", () => {
       yearsExperience: 5, hourlyRate: 100, hourlyRateMax: 150, isOnline: true, status: "PUBLISHED", publishedAt: new Date(),
     } });
     teacherProfileId = teacherProfile.id;
+    await prisma.verification.create({ data: {
+      accountId: teacherId, teacherProfileId, type: "IDENTITY", status: "APPROVED",
+      evidence: { documentPath: "private/identity-card.png" }, reviewNote: "private-review-note",
+      reviewedAt: new Date(), expiresAt: new Date(Date.now() + 30 * DAY),
+    } });
     await prisma.teacherSubject.create({ data: { teacherProfileId, subjectId: subject.id } });
     await prisma.teacherServiceArea.create({ data: { teacherProfileId, regionId: region.id, isPrimary: true } });
     const request = await prisma.tutoringRequest.create({ data: {
@@ -70,12 +118,96 @@ describe("greeting workflow against PostgreSQL", () => {
     const service = createGreetingService(prisma);
     const first = await service.send({ id: parentId, role: "parent" }, { targetId: teacherProfileId, requestId, note: "希望交流教学安排" });
     expect(first).toMatchObject({ status: "PENDING", note: "希望交流教学安排" });
-    expect(first.card).toMatchObject({ teacher: { publicNickname: "林老师" }, request: { title: "初二数学巩固" } });
+    expect(first.card).toMatchObject({
+      teacher: {
+        publicNickname: "林老师", identityType: "FULL_TIME_TEACHER", headline: "把数学讲清楚",
+        yearsExperience: 5, rateMinCents: 10000, rateMaxCents: 15000, online: true, verified: true,
+        subjects: [{ name: "问候数学" }], serviceAreas: [{ name: "问候测试区", isPrimary: true }],
+      },
+      request: {
+        title: "初二数学巩固", studentAlias: "小树", gradeLevel: "GRADE_8",
+        budgetMinCents: 8000, budgetMaxCents: 12000, teachingMode: "BOTH", scheduleText: "周末",
+        region: { name: "问候测试区" }, subjects: [{ name: "问候数学" }],
+      },
+    });
     expect(JSON.stringify(first)).not.toContain("example.test");
+    expect(JSON.stringify(first)).not.toMatch(/evidence|reviewNote|documentPath|private-review-note/i);
     await expect(service.send({ id: teacherId, role: "teacher" }, { targetId: requestId, requestId, note: "可以辅导" }))
       .rejects.toMatchObject({ code: "PENDING_EXISTS" });
     await expect(prisma.greeting.count({ where: { tutoringRequestId: requestId } })).resolves.toBe(1);
   });
+
+  it("marks verification true only for approved records that have not expired", async () => {
+    const scenario = await isolatedScenario("认证边界");
+    expect(scenario.greeting.card).toMatchObject({ teacher: { verified: false } });
+    await prisma.greeting.delete({ where: { id: scenario.greeting.id } });
+    const verification = await prisma.verification.create({ data: {
+      accountId: scenario.teacher.id, teacherProfileId: scenario.teacherProfile.id, type: "IDENTITY", status: "APPROVED",
+      evidence: { path: "private-proof" }, reviewNote: "private-note", reviewedAt: new Date("2026-07-01T00:00:00.000Z"),
+      expiresAt: new Date("2026-07-13T12:00:00.000Z"),
+    } });
+    const expired = await scenario.service.send({ id: scenario.teacher.id, role: "teacher" }, { targetId: scenario.request.id, requestId: scenario.request.id, note: "" });
+    expect(expired.card).toMatchObject({ teacher: { verified: false } });
+    expect(JSON.stringify(expired.card)).not.toMatch(/evidence|reviewNote|private-proof|private-note/i);
+
+    await prisma.greeting.delete({ where: { id: expired.id } });
+    await prisma.verification.update({ where: { id: verification.id }, data: { expiresAt: new Date("2026-07-13T12:00:00.001Z") } });
+    const active = await scenario.service.send({ id: scenario.teacher.id, role: "teacher" }, { targetId: scenario.request.id, requestId: scenario.request.id, note: "" });
+    expect(active.card).toMatchObject({ teacher: { verified: true } });
+  });
+
+  it("serializes simultaneous opposite-direction sends into exactly one context", async () => {
+    const scenario = await isolatedScenario("双向并发");
+    await prisma.greeting.delete({ where: { id: scenario.greeting.id } });
+    await prisma.greetingAttempt.deleteMany({ where: { senderAccountId: { in: [scenario.parent.id, scenario.teacher.id] } } });
+
+    const results = await Promise.allSettled([
+      scenario.service.send({ id: scenario.teacher.id, role: "teacher" }, { targetId: scenario.request.id, requestId: scenario.request.id, note: "老师发起" }),
+      scenario.service.send({ id: scenario.parent.id, role: "parent" }, { targetId: scenario.teacherProfile.id, requestId: scenario.request.id, note: "家长发起" }),
+    ]);
+    expect(results.filter(({ status }) => status === "fulfilled")).toHaveLength(1);
+    const rejected = results.find((result) => result.status === "rejected") as PromiseRejectedResult;
+    expect(rejected.reason).toMatchObject({ code: "PENDING_EXISTS" });
+    await expect(prisma.greeting.count({ where: { tutoringRequestId: scenario.request.id } })).resolves.toBe(1);
+  });
+
+  it.each(["profile", "request", "subject", "region", "sender-account"] as const)(
+    "does not save a greeting when %s is concurrently deactivated under lock_timeout",
+    async (kind) => {
+      const scenario = await isolatedScenario(`并发停用-${kind}`);
+      await prisma.greeting.delete({ where: { id: scenario.greeting.id } });
+      await prisma.greetingAttempt.deleteMany({ where: { senderAccountId: scenario.teacher.id } });
+      const url = new URL(process.env.DATABASE_URL!);
+      url.searchParams.set("options", "-c lock_timeout=2000ms -c statement_timeout=5000ms");
+      const limited = new PrismaClient({ adapter: new PrismaPg({ connectionString: url.toString() }) });
+      const service = createGreetingService(limited, () => new Date("2026-07-13T12:00:00.000Z"));
+      let unlock!: () => void;
+      let markLocked!: () => void;
+      const release = new Promise<void>((resolve) => { unlock = resolve; });
+      const locked = new Promise<void>((resolve) => { markLocked = resolve; });
+      const deactivation = prisma.$transaction(async (transaction) => {
+        if (kind === "profile") await transaction.teacherProfile.update({ where: { id: scenario.teacherProfile.id }, data: { status: "DRAFT", publishedAt: null } });
+        if (kind === "request") await transaction.tutoringRequest.update({ where: { id: scenario.request.id }, data: { status: "DRAFT", publishedAt: null } });
+        if (kind === "subject") await transaction.subject.update({ where: { id: scenario.subject.id }, data: { isActive: false } });
+        if (kind === "region") await transaction.region.update({ where: { id: scenario.region.id }, data: { isActive: false } });
+        if (kind === "sender-account") await transaction.account.update({ where: { id: scenario.teacher.id }, data: { status: "DISABLED" } });
+        markLocked();
+        await release;
+      });
+      try {
+        await locked;
+        const sending = service.send({ id: scenario.teacher.id, role: "teacher" }, { targetId: scenario.request.id, requestId: scenario.request.id, note: "" });
+        unlock();
+        await deactivation;
+        await expect(sending).rejects.toMatchObject({ code: kind === "sender-account" ? "UNAUTHORIZED" : "INVALID_TARGET" });
+        await expect(prisma.greeting.count({ where: { tutoringRequestId: scenario.request.id } })).resolves.toBe(0);
+      } finally {
+        unlock();
+        await deactivation.catch(() => undefined);
+        await limited.$disconnect();
+      }
+    },
+  );
 
   it("only lets the recipient accept and creates exactly one context conversation under concurrency", async () => {
     const service = createGreetingService(prisma);
@@ -124,10 +256,57 @@ describe("greeting workflow against PostgreSQL", () => {
 
   it("expires pending rows while listing and never returns private account fields", async () => {
     const service = createGreetingService(prisma);
-    const page = await service.listInbox({ id: parentId, role: "parent" }, { box: "sent", page: 1, pageSize: 20 });
+    const page = await service.listInbox({ id: parentId, role: "parent" }, { box: "sent", pageSize: 20 });
     expect(page.items.length).toBeGreaterThan(0);
-    expect(page).toMatchObject({ page: 1, pageSize: 20 });
+    expect(page).toMatchObject({ pageSize: 20 });
     expect(JSON.stringify(page)).not.toMatch(/username|email|password|notes|evidence/i);
+  });
+
+  it("walks more than 50 inbox rows with stable keyset cursors while newer rows arrive", async () => {
+    const pagingParent = await account("PARENT", "g-paging-parent");
+    const parentProfile = await prisma.parentProfile.create({ data: { accountId: pagingParent.id, displayName: "分页家长", status: "PUBLISHED" } });
+    const student = await prisma.studentProfile.create({ data: { parentProfileId: parentProfile.id, displayName: "分页学生", isActive: true } });
+    const rows: Array<{ id: string; createdAt: Date }> = [];
+    for (let index = 0; index < 55; index += 1) {
+      const request = await prisma.tutoringRequest.create({ data: {
+        parentProfileId: parentProfile.id, studentProfileId: student.id, regionId: regionIds[0],
+        title: `分页需求${index}`, description: "分页稳定性", budgetMin: 1, budgetMax: 2,
+        teachingMode: "ONLINE", status: "PUBLISHED", publishedAt: new Date("2026-07-01T00:00:00.000Z"),
+        expiresAt: new Date("2027-01-01T00:00:00.000Z"),
+      } });
+      const createdAt = new Date(`2026-07-${String(1 + Math.floor(index / 5)).padStart(2, "0")}T12:00:00.000Z`);
+      const greeting = await prisma.greeting.create({ data: {
+        senderAccountId: teacherId, recipientAccountId: pagingParent.id, tutoringRequestId: request.id,
+        contextKey: `${teacherId}:${pagingParent.id}:${request.id}`, cardSnapshot: { legacy: true },
+        createdAt, expiresAt: new Date("2027-01-01T00:00:00.000Z"),
+      } });
+      rows.push({ id: greeting.id, createdAt });
+    }
+    const expected = rows.toSorted((left, right) => right.createdAt.getTime() - left.createdAt.getTime() || left.id.localeCompare(right.id)).map(({ id }) => id);
+    const service = createGreetingService(prisma, () => new Date("2026-07-13T12:00:00.000Z"));
+    const collected: string[] = [];
+    let page = await service.listInbox({ id: pagingParent.id, role: "parent" }, { box: "received", pageSize: 20 });
+    collected.push(...page.items.map(({ id }) => id));
+    expect(page.nextCursor).toEqual(expect.any(String));
+
+    const lateRequest = await prisma.tutoringRequest.create({ data: {
+      parentProfileId: parentProfile.id, studentProfileId: student.id, regionId: regionIds[0], title: "并发新需求",
+      description: "第一页之后插入", budgetMin: 1, budgetMax: 2, teachingMode: "ONLINE", status: "PUBLISHED",
+      publishedAt: new Date(), expiresAt: new Date("2027-01-01T00:00:00.000Z"),
+    } });
+    const late = await prisma.greeting.create({ data: {
+      senderAccountId: teacherId, recipientAccountId: pagingParent.id, tutoringRequestId: lateRequest.id,
+      contextKey: `${teacherId}:${pagingParent.id}:${lateRequest.id}`, cardSnapshot: { legacy: true },
+      createdAt: new Date("2026-08-01T00:00:00.000Z"), expiresAt: new Date("2027-01-01T00:00:00.000Z"),
+    } });
+
+    while (page.nextCursor) {
+      page = await service.listInbox({ id: pagingParent.id, role: "parent" }, { box: "received", pageSize: 20, cursor: page.nextCursor });
+      collected.push(...page.items.map(({ id }) => id));
+    }
+    expect(collected).toEqual(expected);
+    expect(new Set(collected).size).toBe(55);
+    expect(collected).not.toContain(late.id);
   });
 
   it("allows a rejected context again at exactly 30 days, reusing the same row", async () => {
@@ -147,6 +326,55 @@ describe("greeting workflow against PostgreSQL", () => {
     const retried = await service.send({ id: retryParent.id, role: "parent" }, { targetId: teacherProfileId, requestId: req.id, note: "刚好三十天" });
     expect(retried).toMatchObject({ id: greeting.id, status: "PENDING", note: "刚好三十天" });
     await expect(prisma.greeting.count({ where: { tutoringRequestId: req.id } })).resolves.toBe(1);
+  });
+
+  it("counts a cooldown-rejected send as an attempt on that UTC day", async () => {
+    const scenario = await isolatedScenario("冷却计数");
+    await scenario.service.respond({ id: scenario.parent.id, role: "parent" }, scenario.greeting.id, { action: "reject" });
+    const retryAt = new Date("2026-07-14T08:00:00.000Z");
+    const retryService = createGreetingService(prisma, () => retryAt);
+    await expect(retryService.send({ id: scenario.teacher.id, role: "teacher" }, {
+      targetId: scenario.request.id, requestId: scenario.request.id, note: "冷却期重试",
+    })).rejects.toMatchObject({ code: "COOLDOWN" });
+    await expect(prisma.greetingAttempt.count({ where: {
+      senderAccountId: scenario.teacher.id,
+      attemptedAt: { gte: new Date("2026-07-14T00:00:00.000Z"), lt: new Date("2026-07-15T00:00:00.000Z") },
+    } })).resolves.toBe(1);
+  });
+
+  it("keeps independent ten-attempt limits on both sides of UTC midnight under concurrency", async () => {
+    const scenario = await isolatedScenario("午夜限额");
+    await prisma.greeting.delete({ where: { id: scenario.greeting.id } });
+    await prisma.greetingAttempt.deleteMany({ where: { senderAccountId: { in: [scenario.parent.id, scenario.teacher.id] } } });
+    const requests = [scenario.request];
+    for (let index = 1; index < 20; index += 1) {
+      const request = await prisma.tutoringRequest.create({ data: {
+        parentProfileId: scenario.parentProfile.id, studentProfileId: scenario.student.id, regionId: scenario.region.id,
+        title: `午夜需求${index}`, description: "UTC 边界", budgetMin: 1, budgetMax: 2, teachingMode: "ONLINE",
+        status: "PUBLISHED", publishedAt: new Date("2026-07-01T00:00:00.000Z"), expiresAt: new Date("2027-01-01T00:00:00.000Z"),
+      } });
+      await prisma.requestSubject.create({ data: { tutoringRequestId: request.id, subjectId: scenario.subject.id } });
+      requests.push(request);
+    }
+    let clock = new Date("2026-07-13T23:59:59.999Z");
+    const service = createGreetingService(prisma, () => clock);
+    await expect(Promise.all(requests.slice(0, 10).map((request) => service.send(
+      { id: scenario.parent.id, role: "parent" },
+      { targetId: scenario.teacherProfile.id, requestId: request.id, note: "" },
+    )))).resolves.toHaveLength(10);
+    clock = new Date("2026-07-14T00:00:00.000Z");
+    await expect(Promise.all(requests.slice(10).map((request) => service.send(
+      { id: scenario.parent.id, role: "parent" },
+      { targetId: scenario.teacherProfile.id, requestId: request.id, note: "" },
+    )))).resolves.toHaveLength(10);
+    await expect(prisma.greetingAttempt.count({ where: {
+      senderAccountId: scenario.parent.id,
+      attemptedAt: { gte: new Date("2026-07-13T00:00:00.000Z"), lt: new Date("2026-07-14T00:00:00.000Z") },
+    } })).resolves.toBe(10);
+    await expect(prisma.greetingAttempt.count({ where: {
+      senderAccountId: scenario.parent.id,
+      attemptedAt: { gte: new Date("2026-07-14T00:00:00.000Z"), lt: new Date("2026-07-15T00:00:00.000Z") },
+    } })).resolves.toBe(10);
   });
 
   it("enforces the UTC daily attempt limit under concurrency", async () => {
@@ -192,6 +420,67 @@ describe("greeting workflow against PostgreSQL", () => {
     await prisma.tutoringRequest.update({ where: { id: invalidReq.id }, data: { status: "DRAFT", publishedAt: null } });
     await expect(service.send({ id: invalidParent.id, role: "parent" }, { targetId: teacherProfileId, requestId: invalidReq.id, note: "" })).rejects.toMatchObject({ code: "INVALID_TARGET" });
   });
+
+  it.each(INVALIDATIONS.flatMap((invalidation) => SAFE_ACTIONS.map((action) => [invalidation, action] as const)))(
+    "allows recipient safety action %s / %s after public context invalidation",
+    async (invalidation, action) => {
+      const scenario = await isolatedScenario(`安全-${invalidation}-${action}`);
+      await invalidateScenario(scenario, invalidation);
+      const input = action === "reject" ? { action } as const : { action, reason: "不希望继续联系" } as const;
+
+      await expect(scenario.service.respond({ id: scenario.parent.id, role: "parent" }, scenario.greeting.id, input))
+        .resolves.toMatchObject({ status: action === "reject" ? "REJECTED" : action === "report" ? "REPORTED" : "BLOCKED" });
+      if (action === "report") {
+        await expect(prisma.report.count({ where: { greetingId: scenario.greeting.id } })).resolves.toBe(1);
+        await expect(prisma.block.count({ where: { blockerAccountId: scenario.parent.id, blockedAccountId: scenario.teacher.id } })).resolves.toBe(0);
+        await expect(scenario.service.respond({ id: scenario.parent.id, role: "parent" }, scenario.greeting.id, input)).resolves.toMatchObject({ reported: true });
+      }
+      if (action === "block") {
+        await expect(prisma.block.count({ where: { blockerAccountId: scenario.parent.id, blockedAccountId: scenario.teacher.id } })).resolves.toBe(1);
+      }
+    },
+  );
+
+  it.each(INVALIDATIONS)("rejects accept after %s invalidates the public context", async (invalidation) => {
+    const scenario = await isolatedScenario(`接受-${invalidation}`);
+    await invalidateScenario(scenario, invalidation);
+    await expect(scenario.service.respond({ id: scenario.parent.id, role: "parent" }, scenario.greeting.id, { action: "accept" }))
+      .rejects.toMatchObject({ code: "INVALID_TARGET" });
+    await expect(prisma.conversation.count({ where: { greetingId: scenario.greeting.id } })).resolves.toBe(0);
+  });
+
+  it.each(["accept", "reject", "report", "block"] as const)("rejects sender and unrelated-account %s transitions", async (action) => {
+    const scenario = await isolatedScenario(`越权-${action}`);
+    const stranger = await account("PARENT", `stranger-${action}-${crypto.randomUUID().slice(0, 8)}`);
+    const input = action === "report" || action === "block" ? { action, reason: "越权测试" } as const : { action } as const;
+    await expect(scenario.service.respond({ id: scenario.teacher.id, role: "teacher" }, scenario.greeting.id, input)).rejects.toMatchObject({ code: "FORBIDDEN" });
+    await expect(scenario.service.respond({ id: stranger.id, role: "parent" }, scenario.greeting.id, input)).rejects.toMatchObject({ code: "FORBIDDEN" });
+    await expect(prisma.greeting.findUniqueOrThrow({ where: { id: scenario.greeting.id } })).resolves.toMatchObject({ status: "PENDING" });
+  });
+
+  it.each(["accept", "reject", "report", "block"] as const)("requires an active recipient before %s", async (action) => {
+    const scenario = await isolatedScenario(`停用接收方-${action}`);
+    await prisma.account.update({ where: { id: scenario.parent.id }, data: { status: "DISABLED" } });
+    const input = action === "report" || action === "block" ? { action, reason: "认证顺序测试" } as const : { action } as const;
+    await expect(scenario.service.respond({ id: scenario.parent.id, role: "parent" }, scenario.greeting.id, input))
+      .rejects.toMatchObject({ code: "UNAUTHORIZED" });
+    await expect(prisma.greeting.findUniqueOrThrow({ where: { id: scenario.greeting.id } })).resolves.toMatchObject({ status: "PENDING" });
+  });
+
+  it.each(["accept", "reject", "report", "block"] as const)("checks exact expiry before %s", async (action) => {
+    const scenario = await isolatedScenario(`过期-${action}`);
+    const expiredService = createGreetingService(prisma, () => new Date("2026-07-21T12:00:00.000Z"));
+    const input = action === "report" || action === "block" ? { action, reason: "过期顺序测试" } as const : { action } as const;
+    await expect(expiredService.respond({ id: scenario.parent.id, role: "parent" }, scenario.greeting.id, input))
+      .rejects.toMatchObject({ code: "EXPIRED" });
+    await expect(prisma.greeting.findUniqueOrThrow({ where: { id: scenario.greeting.id } })).resolves.toMatchObject({ status: "EXPIRED" });
+  });
 });
 
 const DAY = 24 * 60 * 60 * 1000;
+const INVALIDATIONS = [
+  "profile-missing", "profile-unpublished", "profile-headline-missing", "request-unpublished", "request-mode-missing", "student-inactive",
+  "subject-inactive", "region-inactive", "sender-account-disabled",
+] as const;
+type Invalidation = typeof INVALIDATIONS[number];
+const SAFE_ACTIONS = ["reject", "report", "block"] as const;

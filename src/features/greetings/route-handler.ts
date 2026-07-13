@@ -62,6 +62,7 @@ type Dependencies = {
     add(actor: AuthenticatedAccount, target: unknown): Promise<unknown>;
     remove(actor: AuthenticatedAccount, target: unknown): Promise<void>;
     list(actor: AuthenticatedAccount): Promise<unknown>;
+    has(actor: AuthenticatedAccount, target: unknown): Promise<boolean>;
   };
 };
 
@@ -77,7 +78,7 @@ export function createInteractionHandlers({ authenticate, greetingService, favor
     greetings: {
       async GET(request: Request) {
         try {
-          const { account, params } = await caller(request, ["realm", "box", "page", "pageSize"]);
+          const { account, params } = await caller(request, ["realm", "box", "pageSize", "cursor"]);
           const query = greetingInboxQuerySchema.parse(Object.fromEntries([...params].filter(([key]) => key !== "realm")));
           return NextResponse.json(await greetingService.listInbox(account, query));
         } catch (error) { return errorResponse(error); }
@@ -103,7 +104,14 @@ export function createInteractionHandlers({ authenticate, greetingService, favor
     favorites: {
       async GET(request: Request) {
         try {
-          const { account } = await caller(request, ["realm"]);
+          const { account, params } = await caller(request, ["realm", "targetType", "targetId"]);
+          const targetType = params.get("targetType");
+          const targetId = params.get("targetId");
+          if ((targetType === null) !== (targetId === null)) throw new RouteInputError("收藏目标参数不完整");
+          if (targetType !== null && targetId !== null) {
+            const target = favoriteTargetSchema.parse({ targetType, targetId });
+            return NextResponse.json({ favorite: await favoriteService.has(account, target) });
+          }
           return NextResponse.json({ favorites: await favoriteService.list(account) });
         } catch (error) { return errorResponse(error); }
       },

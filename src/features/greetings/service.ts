@@ -4,8 +4,12 @@ import { Prisma, type PrismaClient, type TeacherProfile, type TutoringRequest } 
 
 import type { AuthenticatedAccount } from "@/features/auth/service";
 
+import type { CurrentGreetingCardSnapshot } from "./card-schema";
+
 import {
   greetingActionSchema,
+  decodeGreetingCursor,
+  encodeGreetingCursor,
   greetingInboxQuerySchema,
   sendGreetingSchema,
   type GreetingActionInput,
@@ -108,26 +112,64 @@ async function advisoryLock(transaction: Prisma.TransactionClient, key: string) 
   await transaction.$queryRaw`SELECT 1::int AS locked FROM pg_advisory_xact_lock(hashtextextended(${key}, 0))`;
 }
 
-async function lockPublicContext(transaction: Prisma.TransactionClient, teacher: TeacherContext, request: RequestContext) {
-  await transaction.$queryRaw`SELECT "id" FROM "TeacherProfile" WHERE "id" = ${teacher.id}::uuid FOR SHARE`;
-  const teacherSubjectIds = teacher.subjects.map(({ subject }) => subject.id).sort();
-  if (teacherSubjectIds.length) {
-    await transaction.$queryRaw`SELECT "id" FROM "Subject" WHERE "id" IN (${Prisma.join(teacherSubjectIds)}) ORDER BY "id" FOR SHARE`;
+async function lockPublicContext(
+  transaction: Prisma.TransactionClient,
+  teacherProfileId: string,
+  requestId: string,
+  at: Date,
+) {
+  // Task 12 must preserve this global lock order across every publishing and
+  // deactivation workflow: TeacherProfile -> TutoringRequest -> sorted union
+  // Subject -> sorted union Region -> StudentProfile -> ParentProfile ->
+  // sorted Account -> sorted Verification.
+  await transaction.$queryRaw`SELECT "id" FROM "TeacherProfile" WHERE "id" = ${teacherProfileId}::uuid FOR SHARE`;
+  await transaction.$queryRaw`SELECT "id" FROM "TutoringRequest" WHERE "id" = ${requestId}::uuid FOR SHARE`;
+
+  // Root locks stabilize Task 7/8 relationship writers before child IDs are read.
+  const initialTeacher = await loadTeacherContext(transaction, { id: teacherProfileId });
+  const initialRequest = await loadRequestContext(transaction, requestId);
+  if (!initialTeacher || !initialRequest) throw new GreetingWorkflowError("INVALID_TARGET", "公开联系场景已不可用");
+
+  const subjectIds = [...new Set([
+    ...initialTeacher.subjects.map(({ subject }) => subject.id),
+    ...initialRequest.subjects.map(({ subject }) => subject.id),
+  ])].sort();
+  if (subjectIds.length) {
+    await transaction.$queryRaw`SELECT "id" FROM "Subject" WHERE "id" IN (${Prisma.join(subjectIds)}) ORDER BY "id" FOR SHARE`;
   }
-  const teacherRegionIds = teacher.serviceAreas.map(({ region }) => region.id).sort();
-  if (teacherRegionIds.length) {
-    await transaction.$queryRaw`SELECT "id" FROM "Region" WHERE "id" IN (${Prisma.join(teacherRegionIds)}) ORDER BY "id" FOR SHARE`;
+  const regionIds = [...new Set([
+    ...initialTeacher.serviceAreas.map(({ region }) => region.id),
+    ...(initialRequest.regionId ? [initialRequest.regionId] : []),
+  ])].sort();
+  if (regionIds.length) {
+    await transaction.$queryRaw`SELECT "id" FROM "Region" WHERE "id" IN (${Prisma.join(regionIds)}) ORDER BY "id" FOR SHARE`;
   }
-  await transaction.$queryRaw`SELECT "id" FROM "TutoringRequest" WHERE "id" = ${request.id}::uuid FOR SHARE`;
-  const requestSubjectIds = request.subjects.map(({ subject }) => subject.id).sort();
-  if (requestSubjectIds.length) {
-    await transaction.$queryRaw`SELECT "id" FROM "Subject" WHERE "id" IN (${Prisma.join(requestSubjectIds)}) ORDER BY "id" FOR SHARE`;
+  if (initialRequest.studentProfileId) {
+    await transaction.$queryRaw`SELECT "id" FROM "StudentProfile" WHERE "id" = ${initialRequest.studentProfileId}::uuid FOR SHARE`;
   }
-  if (request.regionId) await transaction.$queryRaw`SELECT "id" FROM "Region" WHERE "id" = ${request.regionId}::uuid FOR SHARE`;
-  if (request.studentProfileId) await transaction.$queryRaw`SELECT "id" FROM "StudentProfile" WHERE "id" = ${request.studentProfileId}::uuid FOR SHARE`;
-  await transaction.$queryRaw`SELECT "id" FROM "ParentProfile" WHERE "id" = ${request.parentProfileId}::uuid FOR SHARE`;
-  const accountIds = [teacher.account.id, request.parentProfile.account.id].sort();
+  await transaction.$queryRaw`SELECT "id" FROM "ParentProfile" WHERE "id" = ${initialRequest.parentProfileId}::uuid FOR SHARE`;
+  const accountIds = [...new Set([initialTeacher.account.id, initialRequest.parentProfile.account.id])].sort();
   await transaction.$queryRaw`SELECT "id" FROM "Account" WHERE "id" IN (${Prisma.join(accountIds)}) ORDER BY "id" FOR SHARE`;
+
+  const verificationIds = (await transaction.verification.findMany({
+    where: {
+      teacherProfileId, accountId: initialTeacher.account.id, status: "APPROVED",
+      OR: [{ expiresAt: null }, { expiresAt: { gt: at } }],
+    },
+    select: { id: true }, orderBy: { id: "asc" },
+  })).map(({ id }) => id);
+  if (verificationIds.length) {
+    await transaction.$queryRaw`SELECT "id" FROM "Verification" WHERE "id" IN (${Prisma.join(verificationIds)}) ORDER BY "id" FOR SHARE`;
+  }
+
+  const teacher = await loadTeacherContext(transaction, { id: teacherProfileId });
+  const request = await loadRequestContext(transaction, requestId);
+  if (!teacher || !request) throw new GreetingWorkflowError("INVALID_TARGET", "公开联系场景已不可用");
+  const verified = await transaction.verification.count({ where: {
+    teacherProfileId, accountId: teacher.account.id, status: "APPROVED",
+    OR: [{ expiresAt: null }, { expiresAt: { gt: at } }],
+  } }) > 0;
+  return { teacher, request, verified };
 }
 
 function assertActor(role: string): asserts role is "parent" | "teacher" {
@@ -143,6 +185,8 @@ function assertPublicTeacher(profile: TeacherContext) {
     && profile.publishedAt !== null
     && profile.displayName.trim() !== ""
     && profile.identityType !== null
+    && profile.headline !== null
+    && profile.headline.trim() !== ""
     && profile.bio !== null
     && profile.yearsExperience !== null
     && profile.hourlyRate !== null
@@ -161,6 +205,7 @@ function assertPublicRequest(request: RequestContext, now: Date) {
     && request.publishedAt !== null
     && request.title.trim() !== ""
     && request.description.trim() !== ""
+    && request.teachingMode !== null
     && request.studentProfile?.isActive === true
     && request.region?.isActive === true
     && request.region.level === 3
@@ -170,30 +215,31 @@ function assertPublicRequest(request: RequestContext, now: Date) {
   if (!valid) throw new GreetingWorkflowError("INVALID_TARGET", "家教需求当前不可联系");
 }
 
-function createCard(teacher: TeacherContext, request: RequestContext) {
+function createCard(teacher: TeacherContext, request: RequestContext, verified: boolean): CurrentGreetingCardSnapshot {
   return {
     teacher: {
       id: teacher.id,
       publicNickname: teacher.displayName,
-      identityType: teacher.identityType,
-      headline: teacher.headline,
-      yearsExperience: teacher.yearsExperience,
-      rateMinCents: teacher.hourlyRate ? Math.round(teacher.hourlyRate.toNumber() * 100) : null,
-      rateMaxCents: teacher.hourlyRateMax ? Math.round(teacher.hourlyRateMax.toNumber() * 100) : null,
+      identityType: teacher.identityType!,
+      headline: teacher.headline!,
+      yearsExperience: teacher.yearsExperience!,
+      rateMinCents: Math.round(teacher.hourlyRate!.toNumber() * 100),
+      rateMaxCents: Math.round(teacher.hourlyRateMax!.toNumber() * 100),
       online: teacher.isOnline,
+      verified,
       subjects: teacher.subjects.map(({ subject }) => ({ id: subject.id, name: subject.name })),
       serviceAreas: teacher.serviceAreas.map(({ isPrimary, region }) => ({ id: region.id, name: region.name, isPrimary })),
     },
     request: {
       id: request.id,
       title: request.title,
-      studentAlias: request.studentProfile?.displayName ?? null,
-      gradeLevel: request.studentProfile?.gradeLevel ?? null,
+      studentAlias: request.studentProfile!.displayName,
+      gradeLevel: request.studentProfile!.gradeLevel,
       budgetMinCents: request.budgetMin,
       budgetMaxCents: request.budgetMax,
-      teachingMode: request.teachingMode,
+      teachingMode: request.teachingMode!,
       scheduleText: request.scheduleText,
-      region: request.region ? { id: request.region.id, name: request.region.name } : null,
+      region: { id: request.region!.id, name: request.region!.name },
       subjects: request.subjects.map(({ subject }) => ({ id: subject.id, name: subject.name })),
     },
   };
@@ -282,12 +328,12 @@ export function createGreetingService(prisma: PrismaClient, now: () => Date = ()
       const result = await prisma.$transaction(async (transaction) => {
         const initialContext = await loadSendContext(transaction, actor, input, at);
         await advisoryLock(transaction, `greeting-context:${initialContext.contextKey}`);
-        await lockPublicContext(transaction, initialContext.teacher, initialContext.request);
+        const locked = await lockPublicContext(transaction, initialContext.teacher.id, initialContext.request.id, at);
         const context = await loadSendContext(transaction, actor, input, at);
         if (await hasBlock(transaction, context.teacherId, context.parentId)) {
           throw new GreetingWorkflowError("BLOCKED", "双方当前不能互相联系");
         }
-        const card = createCard(context.teacher, context.request);
+        const card = createCard(context.teacher, context.request, locked.verified);
         const existing = await transaction.greeting.findUnique({ where: { contextKey: context.contextKey } });
         const expiresAt = new Date(at.getTime() + GREETING_LIFETIME_MS);
         if (!existing) {
@@ -348,20 +394,8 @@ export function createGreetingService(prisma: PrismaClient, now: () => Date = ()
           return { workflowError: new GreetingWorkflowError("EXPIRED", `打招呼已于 ${expired.expiresAt.toISOString()} 过期`) };
         }
 
-        const initialRequest = await loadRequestContext(transaction, greeting.tutoringRequestId);
-        if (!initialRequest) throw new GreetingWorkflowError("INVALID_TARGET", "家教需求已不可用");
-        const parentId = initialRequest.parentProfile.account.id;
-        const teacherId = greeting.senderAccountId === parentId ? greeting.recipientAccountId : greeting.senderAccountId;
-        const initialTeacher = await loadTeacherContext(transaction, { accountId: teacherId });
-        if (!initialTeacher) throw new GreetingWorkflowError("INVALID_TARGET", "老师资料已不可用");
-        await lockPublicContext(transaction, initialTeacher, initialRequest);
-        const request = await loadRequestContext(transaction, greeting.tutoringRequestId);
-        const teacher = await loadTeacherContext(transaction, { accountId: teacherId });
-        if (!request || !teacher) throw new GreetingWorkflowError("INVALID_TARGET", "公开联系场景已不可用");
-        assertPublicTeacher(teacher);
-        assertPublicRequest(request, at);
-        if (await hasBlock(transaction, teacherId, parentId)) throw new GreetingWorkflowError("BLOCKED", "双方当前不能互相联系");
-
+        // Reject/report/block remain available to an active recipient even if
+        // the sender or the original public context has since been deactivated.
         if (input.action === "reject") {
           const row = await transaction.greeting.update({ where: { id: greeting.id }, data: { status: "REJECTED", respondedAt: at } });
           return toDto(row);
@@ -383,6 +417,20 @@ export function createGreetingService(prisma: PrismaClient, now: () => Date = ()
           return { ...toDto(row), blocked: true };
         }
 
+        // Accept is the only transition that establishes a live relationship,
+        // so it revalidates the complete public context under the global locks.
+        const teacherId = actor.role === "teacher" ? actor.id : greeting.senderAccountId;
+        const parentId = actor.role === "parent" ? actor.id : greeting.senderAccountId;
+        const teacherRoot = await transaction.teacherProfile.findUnique({ where: { accountId: teacherId }, select: { id: true } });
+        if (!teacherRoot) throw new GreetingWorkflowError("INVALID_TARGET", "老师资料已不可用");
+        const locked = await lockPublicContext(transaction, teacherRoot.id, greeting.tutoringRequestId, at);
+        if (locked.teacher.account.id !== teacherId || locked.request.parentProfile.account.id !== parentId) {
+          throw new GreetingWorkflowError("INVALID_TARGET", "打招呼参与者与公开资料不一致");
+        }
+        assertPublicTeacher(locked.teacher);
+        assertPublicRequest(locked.request, at);
+        if (await hasBlock(transaction, teacherId, parentId)) throw new GreetingWorkflowError("BLOCKED", "双方当前不能互相联系");
+
         const updated = await transaction.greeting.update({ where: { id: greeting.id }, data: { status: "ACCEPTED", respondedAt: at } });
         const conversation = await transaction.conversation.upsert({
           where: { teacherId_parentId_tutoringRequestId: { teacherId, parentId, tutoringRequestId: greeting.tutoringRequestId } },
@@ -403,11 +451,27 @@ export function createGreetingService(prisma: PrismaClient, now: () => Date = ()
       if (!account) throw new GreetingWorkflowError("UNAUTHORIZED", "登录状态无效");
       const side = query.box === "sent" ? { senderAccountId: actor.id } : { recipientAccountId: actor.id };
       await prisma.greeting.updateMany({ where: { ...side, status: "PENDING", expiresAt: { lte: at } }, data: { status: "EXPIRED" } });
-      return prisma.$transaction(async (transaction) => {
-        const rows = await transaction.greeting.findMany({ where: side, orderBy: [{ createdAt: "desc" }, { id: "asc" }], skip: (query.page - 1) * query.pageSize, take: query.pageSize });
-        const total = await transaction.greeting.count({ where: side });
-        return { items: rows.map((row) => toDto(row, actor.id)), total, page: query.page, pageSize: query.pageSize };
-      }, { isolationLevel: "RepeatableRead" });
+      const cursor = query.cursor ? decodeGreetingCursor(query.cursor) : null;
+      const where: Prisma.GreetingWhereInput = {
+        ...side,
+        ...(cursor ? { OR: [
+          { createdAt: { lt: cursor.createdAt } },
+          { createdAt: cursor.createdAt, id: { gt: cursor.id } },
+        ] } : {}),
+      };
+      const rows = await prisma.greeting.findMany({
+        where,
+        orderBy: [{ createdAt: "desc" }, { id: "asc" }],
+        take: query.pageSize + 1,
+      });
+      const hasMore = rows.length > query.pageSize;
+      const items = hasMore ? rows.slice(0, query.pageSize) : rows;
+      const boundary = hasMore ? items.at(-1) : undefined;
+      return {
+        items: items.map((row) => toDto(row, actor.id)),
+        pageSize: query.pageSize,
+        nextCursor: boundary ? encodeGreetingCursor({ createdAt: boundary.createdAt, id: boundary.id }) : null,
+      };
     },
   };
 }

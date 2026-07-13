@@ -19,6 +19,8 @@ describe("greeting workflow database constraints", () => {
       WHERE schemaname = current_schema()
         AND indexname IN (
           'Greeting_contextKey_key',
+          'Greeting_senderAccountId_createdAt_id_idx',
+          'Greeting_recipientAccountId_createdAt_id_idx',
           'Conversation_teacherId_parentId_tutoringRequestId_key',
           'Report_greetingId_key',
           'Favorite_ownerAccountId_teacherProfileId_key',
@@ -30,6 +32,8 @@ describe("greeting workflow database constraints", () => {
       "Favorite_ownerAccountId_teacherProfileId_key",
       "Favorite_ownerAccountId_tutoringRequestId_key",
       "Greeting_contextKey_key",
+      "Greeting_recipientAccountId_createdAt_id_idx",
+      "Greeting_senderAccountId_createdAt_id_idx",
       "Report_greetingId_key",
     ]);
   });

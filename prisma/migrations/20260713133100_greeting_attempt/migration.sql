@@ -1,3 +1,5 @@
+BEGIN;
+
 CREATE TABLE "GreetingAttempt" (
   "id" UUID NOT NULL,
   "senderAccountId" UUID NOT NULL,
@@ -8,3 +10,5 @@ CREATE INDEX "GreetingAttempt_senderAccountId_attemptedAt_idx"
   ON "GreetingAttempt"("senderAccountId", "attemptedAt");
 ALTER TABLE "GreetingAttempt" ADD CONSTRAINT "GreetingAttempt_senderAccountId_fkey"
   FOREIGN KEY ("senderAccountId") REFERENCES "Account"("id") ON DELETE CASCADE ON UPDATE CASCADE;
+
+COMMIT;

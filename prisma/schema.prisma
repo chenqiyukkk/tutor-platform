@@ -357,7 +357,7 @@ model Greeting {
   report          Report?
 
   @@index([recipientAccountId, status])
-  @@index([senderAccountId, createdAt])
+  @@index([senderAccountId, createdAt(sort: Desc), id])
   @@index([recipientAccountId, createdAt(sort: Desc), id])
   @@index([tutoringRequestId])
 }
