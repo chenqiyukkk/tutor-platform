@@ -60,6 +60,26 @@ async function findOwnedRequest(client: Client, accountId: string, id: string) {
   return client.tutoringRequest.findFirst({ where: { id, parentProfile: { accountId } }, include: requestInclude });
 }
 
+async function findOwnedRequestSequential(client: Client, accountId: string, id: string) {
+  const row = await client.tutoringRequest.findFirst({ where: { id, parentProfile: { accountId } } });
+  if (!row) return null;
+  const studentProfile = row.studentProfileId
+    ? await client.studentProfile.findUnique({ where: { id: row.studentProfileId } })
+    : null;
+  const region = row.regionId ? await client.region.findUnique({ where: { id: row.regionId } }) : null;
+  const links = await client.requestSubject.findMany({ where: { tutoringRequestId: row.id } });
+  const subjects = links.length
+    ? await client.subject.findMany({ where: { id: { in: links.map(({ subjectId }) => subjectId) } } })
+    : [];
+  const subjectById = new Map(subjects.map((subject) => [subject.id, subject]));
+  return {
+    ...row,
+    studentProfile,
+    region,
+    subjects: links.map((link) => ({ ...link, subject: subjectById.get(link.subjectId)! })),
+  } satisfies RequestRow;
+}
+
 async function validateReferences(client: Client, parentProfileId: string, input: DraftValues) {
   if (input.studentId) {
     const student = await client.studentProfile.findFirst({ where: { id: input.studentId, parentProfileId, isActive: true }, select: { id: true } });
@@ -143,11 +163,17 @@ export class PrismaRequestRepository implements RequestRepository {
     return this.prisma.$transaction(async (transaction) => {
       const parent = await parentProfile(transaction, accountId);
       await validateReferences(transaction, parent.id, input);
-      const row = await transaction.tutoringRequest.create({ data: {
+      const created = await transaction.tutoringRequest.create({ data: {
         parentProfileId: parent.id,
         ...requestData(input),
-        subjects: input.subjectIds.length ? { createMany: { data: input.subjectIds.map((subjectId) => ({ subjectId })) } } : undefined,
-      }, include: requestInclude });
+      }, select: { id: true } });
+      if (input.subjectIds.length) {
+        await transaction.requestSubject.createMany({
+          data: input.subjectIds.map((subjectId) => ({ tutoringRequestId: created.id, subjectId })),
+        });
+      }
+      const row = await findOwnedRequestSequential(transaction, accountId, created.id);
+      if (!row) throw new RequestWorkflowError("NOT_FOUND", "需求不存在");
       return toRequest(row);
     });
   }
@@ -168,7 +194,7 @@ export class PrismaRequestRepository implements RequestRepository {
       await transaction.requestSubject.deleteMany({ where: { tutoringRequestId: id } });
       await transaction.tutoringRequest.update({ where: { id }, data: { ...requestData(input), status: "DRAFT", publishedAt: null, closedAt: null } });
       if (input.subjectIds.length) await transaction.requestSubject.createMany({ data: input.subjectIds.map((subjectId) => ({ tutoringRequestId: id, subjectId })) });
-      const row = await findOwnedRequest(transaction, accountId, id);
+      const row = await findOwnedRequestSequential(transaction, accountId, id);
       if (!row) throw new RequestWorkflowError("NOT_FOUND", "需求不存在");
       return toRequest(row);
     });
@@ -183,7 +209,7 @@ export class PrismaRequestRepository implements RequestRepository {
         FOR UPDATE OF request
       `;
       if (!lock.length) throw new RequestWorkflowError("NOT_FOUND", "需求不存在");
-      let current = await findOwnedRequest(transaction, accountId, id);
+      let current = await findOwnedRequestSequential(transaction, accountId, id);
       if (!current) throw new RequestWorkflowError("NOT_FOUND", "需求不存在");
       if (current.status === "CLOSED") throw new RequestWorkflowError("CONFLICT", "已关闭的需求不可再次发布");
       const subjectIds = current.subjects.map(({ subjectId }) => subjectId).sort();
@@ -196,7 +222,7 @@ export class PrismaRequestRepository implements RequestRepository {
       // Task 12 deactivation must use the same lock order: request(s), sorted
       // Subject IDs, Region, StudentProfile, then ParentProfile before changing
       // active flags or atomically demoting affected published requests.
-      current = await findOwnedRequest(transaction, accountId, id);
+      current = await findOwnedRequestSequential(transaction, accountId, id);
       if (!current) throw new RequestWorkflowError("NOT_FOUND", "需求不存在");
       const domain = toRequest(current);
       if (current.studentProfileId && (!current.studentProfile || !current.studentProfile.isActive || current.studentProfile.parentProfileId !== current.parentProfileId)) throw new RequestWorkflowError("INVALID_STUDENT", "学生档案无效", { studentId: ["请选择自己的有效学生档案"] });
@@ -204,7 +230,9 @@ export class PrismaRequestRepository implements RequestRepository {
       if (current.regionId && (!current.region || !current.region.isActive || current.region.level !== 3)) throw new RequestWorkflowError("INVALID_REGION", "地区无效或已停用", { regionId: ["请选择有效且启用的区县"] });
       const errors = validatePublishable(domain);
       if (Object.keys(errors).length) throw new RequestWorkflowError("INCOMPLETE_REQUEST", "请完善需求后再发布", errors);
-      const row = await transaction.tutoringRequest.update({ where: { id }, data: { status: "PUBLISHED", publishedAt: new Date(), closedAt: null }, include: requestInclude });
+      await transaction.tutoringRequest.update({ where: { id }, data: { status: "PUBLISHED", publishedAt: new Date(), closedAt: null } });
+      const row = await findOwnedRequestSequential(transaction, accountId, id);
+      if (!row) throw new RequestWorkflowError("NOT_FOUND", "需求不存在");
       return toRequest(row);
     });
   }
@@ -219,11 +247,14 @@ export class PrismaRequestRepository implements RequestRepository {
       `;
       if (!locked.length) throw new RequestWorkflowError("NOT_FOUND", "需求不存在");
       if (locked[0].status === "CLOSED") {
-        const current = await findOwnedRequest(transaction, accountId, id);
+        const current = await findOwnedRequestSequential(transaction, accountId, id);
         if (!current) throw new RequestWorkflowError("NOT_FOUND", "需求不存在");
         return toRequest(current);
       }
-      return toRequest(await transaction.tutoringRequest.update({ where: { id }, data: { status: "CLOSED", publishedAt: null, closedAt: new Date() }, include: requestInclude }));
+      await transaction.tutoringRequest.update({ where: { id }, data: { status: "CLOSED", publishedAt: null, closedAt: new Date() } });
+      const current = await findOwnedRequestSequential(transaction, accountId, id);
+      if (!current) throw new RequestWorkflowError("NOT_FOUND", "需求不存在");
+      return toRequest(current);
     });
   }
 }

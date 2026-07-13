@@ -27,9 +27,9 @@ describe("Prisma parent request repository", () => {
     const account = await prisma.account.create({ data: {
       role: "PARENT", username: `parent-${label}-${marker}`, normalizedUsername: `parent-${label}-${marker}`,
       email: `parent-${label}-${marker}@example.test`, normalizedEmail: `parent-${label}-${marker}@example.test`, passwordHash: "integration-only",
-      parentProfile: { create: { displayName: `家长${label}` } },
     } });
     accountIds.push(account.id);
+    await prisma.parentProfile.create({ data: { accountId: account.id, displayName: `家长${label}` } });
     const subject = await prisma.subject.create({ data: { name: `数学-${label}-${marker}`, slug: `${marker}-${label}-subject` } });
     subjectIds.push(subject.id);
     const region = await prisma.region.create({ data: { code: `R${label}${marker}`, name: `测试区${label}`, level: 3 } });
