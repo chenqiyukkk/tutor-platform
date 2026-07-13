@@ -1,0 +1,60 @@
+import { describe, expect, it } from "vitest";
+
+import {
+  conversationListQuerySchema,
+  decodeConversationCursor,
+  decodeMessageCursor,
+  encodeConversationCursor,
+  encodeMessageCursor,
+  messageListQuerySchema,
+  sendMessageSchema,
+} from "./schema";
+
+const id = "00000000-0000-4000-8000-000000000001";
+
+describe("chat message input", () => {
+  it("trims only the outer whitespace, preserves internal newlines, and counts Unicode code points", () => {
+    expect(sendMessageSchema.parse({ clientMessageId: id, body: "  第一行\n\n第二行  " })).toEqual({
+      clientMessageId: id,
+      body: "第一行\n\n第二行",
+    });
+    const exact = "🙂".repeat(1_000);
+    expect(Array.from(exact)).toHaveLength(1_000);
+    expect(sendMessageSchema.parse({ clientMessageId: id, body: exact }).body).toBe(exact);
+  });
+
+  it("rejects blank or over-1000-code-point bodies, non-UUID ids, sender ids, and unknown fields", () => {
+    expect(() => sendMessageSchema.parse({ clientMessageId: id, body: " \n " })).toThrow();
+    expect(() => sendMessageSchema.parse({ clientMessageId: id, body: "🙂".repeat(1_001) })).toThrow();
+    expect(() => sendMessageSchema.parse({ clientMessageId: "client-1", body: "你好" })).toThrow();
+    expect(() => sendMessageSchema.parse({ clientMessageId: id, body: "你好", senderId: id })).toThrow();
+  });
+});
+
+describe("chat keyset queries", () => {
+  it("round-trips canonical message and conversation cursors", () => {
+    const sentAt = new Date("2026-07-13T08:00:00.123Z");
+    const activityAt = new Date("2026-07-13T09:00:00.456Z");
+    const messageCursor = encodeMessageCursor({ sentAt, id });
+    const conversationCursor = encodeConversationCursor({ activityAt, id });
+
+    expect(decodeMessageCursor(messageCursor)).toEqual({ sentAt, id });
+    expect(decodeConversationCursor(conversationCursor)).toEqual({ activityAt, id });
+    expect(messageListQuerySchema.parse({ before: messageCursor, limit: "100" })).toEqual({ before: messageCursor, limit: 100 });
+    expect(messageListQuerySchema.parse({ after: messageCursor })).toEqual({ after: messageCursor, limit: 50 });
+    expect(conversationListQuerySchema.parse({ cursor: conversationCursor, limit: "100" })).toEqual({ cursor: conversationCursor, limit: 100 });
+  });
+
+  it("rejects noncanonical cursors, mixed directions, offsets, unknown fields, and limits above 100", () => {
+    const cursor = encodeMessageCursor({ sentAt: new Date("2026-07-13T08:00:00.123Z"), id });
+    for (const query of [
+      { before: cursor, after: cursor },
+      { before: "not+base64" },
+      { page: 2 },
+      { ownerAccountId: id },
+      { limit: 101 },
+    ]) expect(() => messageListQuerySchema.parse(query)).toThrow();
+    expect(() => conversationListQuerySchema.parse({ limit: 101 })).toThrow();
+    expect(() => conversationListQuerySchema.parse({ cursor: "not+base64" })).toThrow();
+  });
+});

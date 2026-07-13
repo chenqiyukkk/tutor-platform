@@ -415,7 +415,7 @@ model Message {
   reports      Report[]
 
   @@unique([conversationId, clientMessageId])
-  @@index([conversationId, sentAt])
+  @@index([conversationId, sentAt, id])
   @@index([senderAccountId])
 }
 

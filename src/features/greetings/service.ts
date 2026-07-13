@@ -3,6 +3,7 @@ import "server-only";
 import { Prisma, type PrismaClient, type TeacherProfile, type TutoringRequest } from "@prisma/client";
 
 import type { AuthenticatedAccount } from "@/features/auth/service";
+import { lockAccountPair } from "@/features/interactions/account-pair-lock";
 import { violatesContactPolicy } from "@/features/safety/contact-policy";
 
 import { greetingCardSnapshotSchema, type CurrentGreetingCardSnapshot } from "./card-schema";
@@ -111,14 +112,6 @@ function utcDayRange(now: Date) {
 
 async function advisoryLock(transaction: Prisma.TransactionClient, key: string) {
   await transaction.$queryRaw`SELECT 1::int AS locked FROM pg_advisory_xact_lock(hashtextextended(${key}, 0))`;
-}
-
-function accountPairKey(leftAccountId: string, rightAccountId: string) {
-  return `greeting-pair:${[leftAccountId, rightAccountId].sort().join(":")}`;
-}
-
-async function lockAccountPair(transaction: Prisma.TransactionClient, leftAccountId: string, rightAccountId: string) {
-  await advisoryLock(transaction, accountPairKey(leftAccountId, rightAccountId));
 }
 
 async function lockPublicContext(

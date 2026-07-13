@@ -195,3 +195,21 @@ describe("public content safety migration", () => {
     expect(extractFunction(sql)).toBe(extractFunction(safetySql));
   });
 });
+
+describe("chat polling indexes", () => {
+  it("adds chronological message keysets and participant activity/unread indexes forward-only", () => {
+    expect(schema).toMatch(/@@index\(\[conversationId, sentAt, id\]\)/);
+    const chatMigration = readdirSync(migrationsDirectory, { withFileTypes: true }).find(
+      (entry) => entry.isDirectory() && entry.name === "20260713133600_chat_polling_indexes",
+    );
+    expect(chatMigration).toBeDefined();
+    if (!chatMigration) return;
+    const sql = readFileSync(join(migrationsDirectory, chatMigration.name, "migration.sql"), "utf8");
+    expect(sql.trimStart().startsWith("BEGIN;")).toBe(true);
+    expect(sql.trimEnd().endsWith("COMMIT;")).toBe(true);
+    expect(sql).toContain('"Message_conversationId_sentAt_id_idx"');
+    expect(sql).toContain('"Message_conversationId_unread_sender_idx"');
+    expect(sql).toContain('"Conversation_teacherId_activityAt_id_idx"');
+    expect(sql).toContain('"Conversation_parentId_activityAt_id_idx"');
+  });
+});

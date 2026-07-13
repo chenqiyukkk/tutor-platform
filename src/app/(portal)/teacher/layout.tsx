@@ -13,6 +13,7 @@ export default async function TeacherLayout({ children }: { children: React.Reac
           <Link href="/teacher/dashboard">工作台</Link>
           <Link href="/teacher/profile">教师资料</Link>
           <Link href="/teacher/greetings">往来卡片</Link>
+          <Link href="/teacher/messages">消息</Link>
         </nav>
         <form action="/api/auth/teacher/logout" method="post">
           <button className="button button--outline button--small" type="submit">退出登录</button>
