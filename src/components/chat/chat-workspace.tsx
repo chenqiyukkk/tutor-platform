@@ -42,6 +42,8 @@ export function ChatWorkspace({ realm }: { realm: ChatRealm }) {
   const [conversations, setConversations] = useState<ConversationItem[]>([]);
   const [conversationState, setConversationState] = useState<"loading" | "ready" | "error">("loading");
   const [conversationReload, setConversationReload] = useState(0);
+  const [conversationNextCursor, setConversationNextCursor] = useState<string | null>(null);
+  const [loadingMoreConversations, setLoadingMoreConversations] = useState(false);
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [mobileView, setMobileView] = useState<"list" | "thread">("list");
   const [messages, setMessages] = useState<DisplayMessage[]>([]);
@@ -51,6 +53,7 @@ export function ChatWorkspace({ realm }: { realm: ChatRealm }) {
   const [pollEpoch, setPollEpoch] = useState(0);
 
   const conversationGeneration = useRef(0);
+  const conversationPageController = useRef<AbortController | null>(null);
   const threadGeneration = useRef(0);
   const historyController = useRef<AbortController | null>(null);
   const olderController = useRef<AbortController | null>(null);
@@ -63,6 +66,7 @@ export function ChatWorkspace({ realm }: { realm: ChatRealm }) {
 
   useEffect(() => {
     const generation = ++conversationGeneration.current;
+    conversationPageController.current?.abort();
     const controller = new AbortController();
     void fetch(`/api/conversations?realm=${realm}&limit=100`, {
       cache: "no-store",
@@ -70,6 +74,8 @@ export function ChatWorkspace({ realm }: { realm: ChatRealm }) {
     }).then(responseJson<ConversationPage>).then((page) => {
       if (generation !== conversationGeneration.current) return;
       setConversations(page.items);
+      setConversationNextCursor(page.nextCursor);
+      setLoadingMoreConversations(false);
       setMessages([]);
       setBeforeCursor(null);
       setPollEpoch(0);
@@ -179,8 +185,8 @@ export function ChatWorkspace({ realm }: { realm: ChatRealm }) {
         schedule(page.hasMore ? 0 : delay);
       } catch (error) {
         if (disposed || generation !== threadGeneration.current || isAbortError(error)) return;
-        delay = Math.min(delay * 2, MAX_POLL_INTERVAL_MS);
         schedule(delay);
+        delay = Math.min(delay * 2, MAX_POLL_INTERVAL_MS);
       }
     }
 
@@ -206,6 +212,7 @@ export function ChatWorkspace({ realm }: { realm: ChatRealm }) {
   }, [markRead, pollEpoch, realm, selectedId]);
 
   useEffect(() => () => {
+    conversationPageController.current?.abort();
     historyController.current?.abort();
     olderController.current?.abort();
     pollController.current?.abort();
@@ -228,6 +235,38 @@ export function ChatWorkspace({ realm }: { realm: ChatRealm }) {
     setThreadState("loading");
     setSelectedId(id);
     setMobileView("thread");
+  }
+
+  async function loadMoreConversations() {
+    if (!conversationNextCursor || loadingMoreConversations) return;
+    const cursor = conversationNextCursor;
+    const generation = conversationGeneration.current;
+    const controller = new AbortController();
+    conversationPageController.current?.abort();
+    conversationPageController.current = controller;
+    setLoadingMoreConversations(true);
+    try {
+      const response = await fetch(
+        `/api/conversations?realm=${realm}&limit=100&cursor=${encodeURIComponent(cursor)}`,
+        { cache: "no-store", signal: controller.signal },
+      );
+      const page = await responseJson<ConversationPage>(response);
+      if (generation !== conversationGeneration.current) return;
+      setConversations((current) => {
+        const knownIds = new Set(current.map(({ id }) => id));
+        const additions = page.items.filter(({ id }) => {
+          if (knownIds.has(id)) return false;
+          knownIds.add(id);
+          return true;
+        });
+        return [...current, ...additions];
+      });
+      setConversationNextCursor(page.nextCursor);
+    } catch (error) {
+      if (generation !== conversationGeneration.current || isAbortError(error)) return;
+    } finally {
+      if (generation === conversationGeneration.current) setLoadingMoreConversations(false);
+    }
   }
 
   async function loadOlder() {
@@ -326,7 +365,14 @@ export function ChatWorkspace({ realm }: { realm: ChatRealm }) {
       ) : null}
       {conversationState === "ready" ? (
         <div className="chat-workspace" data-mobile-view={mobileView} data-testid="chat-workspace">
-          <ConversationList conversations={conversations} onSelect={selectConversation} selectedId={selectedId} />
+          <ConversationList
+            conversations={conversations}
+            hasMore={Boolean(conversationNextCursor)}
+            loadingMore={loadingMoreConversations}
+            onLoadMore={() => { void loadMoreConversations(); }}
+            onSelect={selectConversation}
+            selectedId={selectedId}
+          />
           <div className="chat-correspondence">
             {selectedConversation ? (
               <>

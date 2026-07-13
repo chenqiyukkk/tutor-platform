@@ -13,10 +13,16 @@ function activityLabel(value: string) {
 
 export function ConversationList({
   conversations,
+  hasMore,
+  loadingMore,
+  onLoadMore,
   onSelect,
   selectedId,
 }: {
   conversations: ConversationItem[];
+  hasMore: boolean;
+  loadingMore: boolean;
+  onLoadMore(): void;
   onSelect(id: string): void;
   selectedId: string | null;
 }) {
@@ -64,6 +70,16 @@ export function ConversationList({
           })}
         </ol>
       )}
+      {hasMore ? (
+        <button
+          className="chat-conversation-index__more"
+          disabled={loadingMore}
+          onClick={onLoadMore}
+          type="button"
+        >
+          {loadingMore ? "正在加载更多会话…" : "加载更多会话"}
+        </button>
+      ) : null}
     </nav>
   );
 }

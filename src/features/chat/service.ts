@@ -231,6 +231,9 @@ export function createChatService(prisma: PrismaClient, now: () => Date = () => 
       await loadConversation(prisma, actor, conversationId);
       const cursorValue = query.before ?? query.after;
       const cursor = cursorValue ? decodeMessageCursor(cursorValue) : null;
+      const initialPollingWatermark = !query.before && !query.after
+        ? encodeMessageCursor({ sentAt: now(), id: "00000000-0000-0000-0000-000000000000" })
+        : null;
       const cursorWhere: Prisma.MessageWhereInput = !cursor ? {} : query.after ? { OR: [
         { sentAt: { gt: cursor.sentAt } },
         { sentAt: cursor.sentAt, id: { gt: cursor.id } },
@@ -258,10 +261,7 @@ export function createChatService(prisma: PrismaClient, now: () => Date = () => 
       const chronological = ascending ? selected : selected.toReversed();
       const first = chronological[0];
       const last = chronological.at(-1);
-      const emptyAfterCursor = query.after
-        ?? (!query.before
-          ? encodeMessageCursor({ sentAt: now(), id: "00000000-0000-0000-0000-000000000000" })
-          : null);
+      const emptyAfterCursor = query.after ?? initialPollingWatermark;
       return {
         items: chronological.map((row) => toMessageDto(row, actor.id)),
         limit: query.limit,
@@ -291,9 +291,6 @@ export function createChatService(prisma: PrismaClient, now: () => Date = () => 
         if (conversation.teacherId !== preliminary.teacherId || conversation.parentId !== preliminary.parentId) {
           throw new ChatWorkflowError("CONFLICT", "会话成员已发生变化，请重试");
         }
-        if (await hasBlock(transaction, conversation.teacherId, conversation.parentId)) {
-          throw new ChatWorkflowError("BLOCKED", "双方当前不能互相发送消息");
-        }
         const existing = await transaction.message.findUnique({
           where: { conversationId_clientMessageId: { conversationId, clientMessageId: input.clientMessageId } },
           select: {
@@ -311,6 +308,9 @@ export function createChatService(prisma: PrismaClient, now: () => Date = () => 
             throw new ChatWorkflowError("CONFLICT", "clientMessageId 已用于另一条消息");
           }
           return toMessageDto(existing, actor.id);
+        }
+        if (await hasBlock(transaction, conversation.teacherId, conversation.parentId)) {
+          throw new ChatWorkflowError("BLOCKED", "双方当前不能互相发送消息");
         }
         const at = now();
         const created = await transaction.message.create({

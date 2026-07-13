@@ -1193,6 +1193,8 @@ h3 {
 .chat-conversation-list__copy time { color: var(--color-ink-soft); font-size: var(--text-xs); }
 .chat-conversation-list button[aria-current="true"] time { color: #dce7df; }
 .chat-unread-count { display: grid; min-width: 26px; min-height: 26px; padding-inline: .35rem; border-radius: 999px; background: var(--color-vermilion); color: var(--color-white); place-items: center; font-size: var(--text-xs); font-weight: 900; }
+.chat-conversation-index__more { display: block; width: calc(100% - 2rem); min-height: 44px; margin: var(--space-4) auto; border: 1px solid var(--color-forest); background: transparent; color: var(--color-forest); cursor: pointer; font-size: var(--text-sm); font-weight: 900; }
+.chat-conversation-index__more:disabled { cursor: wait; opacity: .55; }
 .chat-correspondence { display: grid; min-width: 0; min-height: 0; background: var(--color-paper-light); grid-template-rows: minmax(0, 1fr) auto; }
 .chat-thread { display: grid; min-height: 0; grid-template-rows: auto minmax(0, 1fr); }
 .chat-thread__header { display: grid; min-height: 118px; padding: var(--space-4) var(--space-5); align-items: center; border-bottom: 1px solid var(--color-line-dark); background: var(--color-white); gap: var(--space-4); grid-template-columns: minmax(0, 1fr) auto; }

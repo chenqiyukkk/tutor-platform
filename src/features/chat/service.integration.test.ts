@@ -153,6 +153,31 @@ describe("chat service against PostgreSQL", () => {
       .rejects.toMatchObject({ code: "CONFLICT" });
   });
 
+  it("replays an exact committed message after block while rejecting conflicts and new sends", async () => {
+    const clientMessageId = crypto.randomUUID();
+    const first = await service.sendMessage(teacher, conversationId, {
+      clientMessageId,
+      body: "  已经提交的消息  ",
+    });
+    await prisma.block.create({ data: { blockerAccountId: parent.id, blockedAccountId: teacher.id } });
+
+    const replayed = await service.sendMessage(teacher, conversationId, {
+      clientMessageId,
+      body: "已经提交的消息",
+    });
+
+    expect(replayed).toEqual(first);
+    await expect(prisma.message.count({ where: { conversationId } })).resolves.toBe(1);
+    await expect(service.sendMessage(teacher, conversationId, { clientMessageId, body: "冲突正文" }))
+      .rejects.toMatchObject({ code: "CONFLICT" });
+    await expect(service.sendMessage(parent, conversationId, { clientMessageId, body: "已经提交的消息" }))
+      .rejects.toMatchObject({ code: "CONFLICT" });
+    await expect(service.sendMessage(teacher, conversationId, {
+      clientMessageId: crypto.randomUUID(),
+      body: "屏蔽后的新消息",
+    })).rejects.toMatchObject({ code: "BLOCKED" });
+  });
+
   it.each([
     ["teacher blocks parent", () => ({ blockerAccountId: teacher.id, blockedAccountId: parent.id })],
     ["parent blocks teacher", () => ({ blockerAccountId: parent.id, blockedAccountId: teacher.id })],
@@ -236,6 +261,45 @@ describe("chat service against PostgreSQL", () => {
       sentAt: fixedNow,
       id: "00000000-0000-0000-0000-000000000000",
     }));
+  });
+
+  it("does not lose a message committed after the empty history query", async () => {
+    const watermarkAt = new Date("2026-07-13T12:00:00.000Z");
+    const tooEarlyAt = new Date("2026-07-13T11:59:59.000Z");
+    let capturedWatermark: Date | null = null;
+    let insertedId = "";
+    const queryHookPrisma = {
+      account: prisma.account,
+      conversation: prisma.conversation,
+      greeting: prisma.greeting,
+      tutoringRequest: prisma.tutoringRequest,
+      parentProfile: prisma.parentProfile,
+      teacherProfile: prisma.teacherProfile,
+      message: {
+        findMany: async (args: Parameters<typeof prisma.message.findMany>[0]) => {
+          const rows = await prisma.message.findMany(args);
+          const inserted = await prisma.message.create({ data: {
+            conversationId,
+            senderAccountId: teacher.id,
+            clientMessageId: crypto.randomUUID(),
+            body: "查询后提交的消息",
+            sentAt: capturedWatermark ?? tooEarlyAt,
+          } });
+          insertedId = inserted.id;
+          return rows;
+        },
+      },
+    } as unknown as PrismaClient;
+    const hookedService = createChatService(queryHookPrisma, () => {
+      capturedWatermark = watermarkAt;
+      return watermarkAt;
+    });
+
+    const initial = await hookedService.listMessages(parent, conversationId, {});
+    expect(initial.items).toEqual([]);
+    const polled = await service.listMessages(parent, conversationId, { after: initial.nextAfterCursor! });
+
+    expect(polled.items.map(({ id }) => id)).toContain(insertedId);
   });
 
   it("counts only unread messages from the counterpart and marks only those with server time", async () => {

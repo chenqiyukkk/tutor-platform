@@ -21,8 +21,24 @@ const conversationB = {
 };
 const watermark = "watermark-a";
 
-function conversationsResponse() {
-  return Response.json({ items: [conversationA, conversationB], limit: 20, nextCursor: null });
+function conversationsResponse(
+  items = [conversationA, conversationB],
+  nextCursor: string | null = null,
+) {
+  return Response.json({ items, limit: 100, nextCursor });
+}
+
+function numberedConversation(index: number) {
+  return {
+    ...conversationA,
+    id: `60000000-0000-4000-8000-${String(index).padStart(12, "0")}`,
+    counterpart: { role: "parent" as const, displayName: `第${index}位家长` },
+    request: {
+      id: `70000000-0000-4000-8000-${String(index).padStart(12, "0")}`,
+      title: `第${index}项辅导需求`,
+    },
+    unreadCount: 0,
+  };
 }
 
 function messagesResponse(
@@ -129,7 +145,68 @@ describe("ChatWorkspace", () => {
     expect(screen.queryByText("过期的数学消息")).not.toBeInTheDocument();
   });
 
-  it("polls only while visible, pulls immediately on resume, and backs off 2/4/8 seconds", async () => {
+  it("loads and de-duplicates conversation cursor pages so the 101st conversation is reachable", async () => {
+    const firstPage = Array.from({ length: 100 }, (_, index) => numberedConversation(index + 1));
+    const finalConversation = numberedConversation(101);
+    const fetchMock = vi.fn<(input: RequestInfo | URL) => Promise<Response>>(async (input) => {
+      const url = String(input);
+      if (url.includes("/api/conversations?realm=teacher&limit=100&cursor=page-2")) {
+        return conversationsResponse([firstPage[99], finalConversation, finalConversation]);
+      }
+      if (url.startsWith("/api/conversations?")) return conversationsResponse(firstPage, "page-2");
+      if (url.includes("/messages?")) return messagesResponse([]);
+      return Response.json({ readCount: 0, readAt: "2026-07-13T12:01:00.000Z" });
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    render(<ChatWorkspace realm="teacher" />);
+    const loadMore = await screen.findByRole("button", { name: "加载更多会话" });
+    expect(screen.queryByRole("button", { name: /第101位家长/ })).not.toBeInTheDocument();
+    fireEvent.click(loadMore);
+
+    expect(await screen.findByRole("button", { name: /第101位家长/ })).toBeInTheDocument();
+    expect(screen.getByText("101 封已建立的往来")).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "加载更多会话" })).not.toBeInTheDocument();
+    expect(fetchMock).toHaveBeenCalledWith(
+      "/api/conversations?realm=teacher&limit=100&cursor=page-2",
+      expect.objectContaining({ cache: "no-store", signal: expect.any(AbortSignal) }),
+    );
+  });
+
+  it("aborts and ignores a stale conversation page when the realm changes", async () => {
+    const stalePage = deferred<Response>();
+    const staleConversation = numberedConversation(102);
+    let pageSignal: AbortSignal | undefined;
+    const fetchMock = vi.fn<(input: RequestInfo | URL, init?: RequestInit) => Promise<Response>>(async (input, init) => {
+      const url = String(input);
+      if (url.includes("cursor=teacher-next")) {
+        pageSignal = init?.signal ?? undefined;
+        return stalePage.promise;
+      }
+      if (url === "/api/conversations?realm=teacher&limit=100") {
+        return conversationsResponse([conversationA], "teacher-next");
+      }
+      if (url === "/api/conversations?realm=parent&limit=100") {
+        return conversationsResponse([conversationB]);
+      }
+      if (url.includes("/messages?")) return messagesResponse([]);
+      return Response.json({ readCount: 0, readAt: "2026-07-13T12:01:00.000Z" });
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    const view = render(<ChatWorkspace realm="teacher" />);
+    fireEvent.click(await screen.findByRole("button", { name: "加载更多会话" }));
+    await waitFor(() => expect(pageSignal).toBeDefined());
+    view.rerender(<ChatWorkspace realm="parent" />);
+
+    expect(pageSignal?.aborted).toBe(true);
+    expect(await screen.findByRole("button", { name: /李家长/ })).toBeInTheDocument();
+    stalePage.resolve(conversationsResponse([staleConversation]));
+    await act(async () => { await Promise.resolve(); });
+    expect(screen.queryByRole("button", { name: /第102位家长/ })).not.toBeInTheDocument();
+  });
+
+  it("polls only while visible, pulls immediately on resume, and starts retries after 2 seconds", async () => {
     vi.useFakeTimers();
     let visibility: DocumentVisibilityState = "visible";
     vi.spyOn(document, "visibilityState", "get").mockImplementation(() => visibility);
@@ -162,7 +239,7 @@ describe("ChatWorkspace", () => {
 
     await act(async () => { await vi.advanceTimersByTimeAsync(2_000); });
     expect(pollingCalls).toBe(1);
-    await act(async () => { await vi.advanceTimersByTimeAsync(3_999); });
+    await act(async () => { await vi.advanceTimersByTimeAsync(1_999); });
     expect(pollingCalls).toBe(1);
     await act(async () => { await vi.advanceTimersByTimeAsync(1); });
     expect(pollingCalls).toBe(2);
@@ -185,6 +262,51 @@ describe("ChatWorkspace", () => {
     expect(pollingCalls).toBe(3);
     await act(async () => { await vi.advanceTimersByTimeAsync(1); });
     expect(fetchMock.mock.calls.some(([url]) => String(url).includes("after=watermark-new"))).toBe(true);
+  });
+
+  it("backs failed polls off by 2/4/8/16/30 seconds, caps at 30, and resets after success", async () => {
+    vi.useFakeTimers();
+    vi.spyOn(document, "visibilityState", "get").mockReturnValue("visible");
+    const pollResults: Array<Response | Error> = [
+      ...Array.from({ length: 6 }, (_, index) => new TypeError(`offline-${index + 1}`)),
+      messagesResponse([message({
+        id: "20000000-0000-4000-8000-000000000010",
+        body: "退避恢复消息",
+      })], { after: "watermark-reset" }),
+    ];
+    let pollingCalls = 0;
+    const fetchMock = vi.fn<(input: RequestInfo | URL) => Promise<Response>>(async (input) => {
+      const url = String(input);
+      if (url.startsWith("/api/conversations?")) return conversationsResponse();
+      if (url.includes("after=watermark")) {
+        pollingCalls += 1;
+        const result = pollResults.shift() ?? messagesResponse([], { after: "watermark-reset" });
+        if (result instanceof Error) throw result;
+        return result;
+      }
+      if (url.includes("/messages?")) return messagesResponse([], { after: watermark });
+      return Response.json({ readCount: 0, readAt: "2026-07-13T12:01:00.000Z" });
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    render(<ChatWorkspace realm="teacher" />);
+    await act(async () => {
+      for (let pass = 0; pass < 6; pass += 1) await Promise.resolve();
+    });
+
+    const intervals = [2_000, 2_000, 4_000, 8_000, 16_000, 30_000, 30_000];
+    for (const [index, interval] of intervals.entries()) {
+      await act(async () => { await vi.advanceTimersByTimeAsync(interval - 1); });
+      expect(pollingCalls).toBe(index);
+      await act(async () => { await vi.advanceTimersByTimeAsync(1); });
+      expect(pollingCalls).toBe(index + 1);
+    }
+    expect(screen.getByText("退避恢复消息")).toBeInTheDocument();
+
+    await act(async () => { await vi.advanceTimersByTimeAsync(1_999); });
+    expect(pollingCalls).toBe(7);
+    await act(async () => { await vi.advanceTimersByTimeAsync(1); });
+    expect(fetchMock.mock.calls.some(([url]) => String(url).includes("after=watermark-reset"))).toBe(true);
   });
 
   it("reconciles optimistic messages by clientMessageId without duplicates", async () => {
