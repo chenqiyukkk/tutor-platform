@@ -10,6 +10,8 @@ import { setTimeout as delay } from "node:timers/promises";
 import { Client, Pool } from "pg";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 
+import { violatesContactPolicy } from "@/features/safety/contact-policy";
+
 if (!process.env.DATABASE_URL && existsSync(".env")) loadEnvFile(".env");
 if (!process.env.DATABASE_URL) throw new Error("DATABASE_URL is required for greeting migration upgrade tests");
 
@@ -201,9 +203,12 @@ describe("greeting workflow migration upgrades", () => {
     }
   }, 60_000);
 
-  it("demotes legacy unsafe public content while preserving technical text", async () => {
+  it.each([
+    { migrationCount: 12, path: "133400 followed by 133500" },
+    { migrationCount: 13, path: "133500 backfill" },
+  ])("keeps $path equivalent to runtime public-text policy and completeness", async ({ migrationCount }) => {
     const database = await createDatabase();
-    const root = createMigrationWorkspace(MIGRATIONS.length - 1);
+    const root = createMigrationWorkspace(migrationCount);
     const client = new Client({ connectionString: database.url });
     const stamp = new Date("2026-07-01T12:00:00.000Z");
     const unsafeTeacherTexts = [
@@ -211,22 +216,86 @@ describe("greeting workflow migration upgrades", () => {
       "座机 010-88886666",
       "ＷｈａｔｓＡｐｐ tutor88",
       "We\u200BChat tutor88",
+      "WX号 tutor88",
+      "VX: tutor88",
+      "QQ 123456",
+      "扣 扣 123456",
+      "TG: tutor88",
+      "W h a t s A p p tutor88",
+      "Tele gram tutor88",
+      "RED ID: tutor88",
+      "LINE ID: tutor88",
+      "Signal ID: tutor88",
+      "请付信息费后联系",
+      "需要支付中介费",
+      "私聊发资料",
+      "联系方式见简介",
     ];
-    const unsafeTeachers = unsafeTeacherTexts.map((text) => ({
-      text,
+    const unsafeTeachers = unsafeTeacherTexts.map((headline, index) => ({
+      key: `unsafe-${index}`,
+      displayName: "Legacy unsafe teacher",
+      headline,
+      bio: "Technical tutoring profile",
       accountId: randomUUID(),
       profileId: randomUUID(),
+      expectedStatus: "DRAFT",
+      expectedVersion: 0,
     }));
-    const safeTeacherAccountId = randomUUID(), safeTeacherProfileId = randomUUID();
+    const safeTeachers = [
+      {
+        key: "technical",
+        displayName: "Node.js teacher",
+        headline: "Vue.js and signal processing",
+        bio: "Technical tutoring profile",
+      },
+      {
+        key: "zero-width-math",
+        displayName: "数学老师",
+        headline: "数学\u200B辅导",
+        bio: "专注数学思维与解题方法的系统辅导",
+      },
+    ].map((fixture) => ({
+      ...fixture,
+      accountId: randomUUID(),
+      profileId: randomUUID(),
+      expectedStatus: "PUBLISHED",
+      expectedVersion: 1,
+    }));
+    const incompleteTeachers = [
+      { key: "blank-name", displayName: "   ", headline: "Safe headline", bio: "Technical tutoring profile" },
+      { key: "blank-headline", displayName: "Legacy teacher", headline: "   ", bio: "Technical tutoring profile" },
+      { key: "blank-bio", displayName: "Legacy teacher", headline: "Safe headline", bio: "   " },
+    ].map((fixture) => ({
+      ...fixture,
+      accountId: randomUUID(),
+      profileId: randomUUID(),
+      expectedStatus: "DRAFT",
+      expectedVersion: 0,
+    }));
+    const teacherFixtures = [...unsafeTeachers, ...safeTeachers, ...incompleteTeachers];
     const parentId = randomUUID(), parentProfileId = randomUUID();
-    const unsafeStudentId = randomUUID(), safeStudentId = randomUUID();
-    const unsafeRequestId = randomUUID(), safeRequestId = randomUUID();
+    const students = {
+      unsafe: { id: randomUUID(), displayName: "LINE ID tutor88", isActive: true },
+      safe: { id: randomUUID(), displayName: "Node.js learner", isActive: true },
+      blank: { id: randomUUID(), displayName: "   ", isActive: true },
+      inactive: { id: randomUUID(), displayName: "Inactive learner", isActive: false },
+    };
+    const requestFixtures = [
+      { key: "unsafe-student", title: "Legacy request", description: "Preserve me", studentId: students.unsafe.id, expectedStatus: "DRAFT", expectedVersion: 0 },
+      { key: "safe", title: "Vue.js tutoring", description: "Learn signal processing", studentId: students.safe.id, expectedStatus: "PUBLISHED", expectedVersion: 1 },
+      { key: "blank-title", title: "   ", description: "Preserve me", studentId: students.safe.id, expectedStatus: "DRAFT", expectedVersion: 0 },
+      { key: "blank-description", title: "Legacy request", description: "   ", studentId: students.safe.id, expectedStatus: "DRAFT", expectedVersion: 0 },
+      { key: "blank-student", title: "Legacy request", description: "Preserve me", studentId: students.blank.id, expectedStatus: "DRAFT", expectedVersion: 0 },
+      { key: "inactive-student", title: "Legacy request", description: "Preserve me", studentId: students.inactive.id, expectedStatus: "DRAFT", expectedVersion: 0 },
+      { key: "missing-student", title: "Legacy request", description: "Preserve me", studentId: null, expectedStatus: "DRAFT", expectedVersion: 0 },
+    ].map((fixture) => ({ ...fixture, id: randomUUID() }));
     try {
+      for (const text of unsafeTeacherTexts) expect(violatesContactPolicy(text)).toBe(true);
+      for (const teacher of safeTeachers) expect(violatesContactPolicy(teacher.headline)).toBe(false);
       expectPrismaSuccess(runPrisma(root, database.url, ["migrate", "deploy"]));
       await client.connect();
       for (const [id, role, label] of [
-        ...unsafeTeachers.map(({ accountId }, index) => [accountId, "TEACHER", `unsafe-teacher-${index}`] as const),
-        [safeTeacherAccountId, "TEACHER", "safe-teacher"],
+        ...teacherFixtures.map(({ accountId, key }) => [accountId, "TEACHER", `teacher-${key}`] as const),
         [parentId, "PARENT", "parent"],
       ] as const) {
         await client.query(`
@@ -234,48 +303,54 @@ describe("greeting workflow migration upgrades", () => {
           VALUES ($1,$2,$3,$3,$4,$4,'hash',$5,$5)
         `, [id, role, `${label}-${id}`, `${label}-${id}@example.test`, stamp]);
       }
-      for (const unsafe of unsafeTeachers) {
+      for (const teacher of teacherFixtures) {
         await client.query(`
           INSERT INTO "TeacherProfile" ("id","accountId","displayName","headline","bio","status","publishedAt","createdAt","updatedAt")
-          VALUES ($1,$2,'Legacy unsafe teacher',$3,'Math tutoring','PUBLISHED',$4,$4,$4)
-        `, [unsafe.profileId, unsafe.accountId, unsafe.text, stamp]);
+          VALUES ($1,$2,$3,$4,$5,'PUBLISHED',$6,$6,$6)
+        `, [teacher.profileId, teacher.accountId, teacher.displayName, teacher.headline, teacher.bio, stamp]);
       }
-      await client.query(`
-        INSERT INTO "TeacherProfile" ("id","accountId","displayName","headline","bio","status","publishedAt","createdAt","updatedAt")
-        VALUES ($1,$2,'Node.js teacher','Vue.js and signal processing','Technical tutoring','PUBLISHED',$3,$3,$3)
-      `, [safeTeacherProfileId, safeTeacherAccountId, stamp]);
       await client.query(`
         INSERT INTO "ParentProfile" ("id","accountId","displayName","status","createdAt","updatedAt")
         VALUES ($1,$2,'Legacy parent','PUBLISHED',$3,$3)
       `, [parentProfileId, parentId, stamp]);
-      await client.query(`
-        INSERT INTO "StudentProfile" ("id","parentProfileId","displayName","gradeLevel","createdAt","updatedAt")
-        VALUES ($1,$3,'LINE ID tutor88','GRADE_8',$4,$4), ($2,$3,'Node.js learner','GRADE_8',$4,$4)
-      `, [unsafeStudentId, safeStudentId, parentProfileId, stamp]);
-      await client.query(`
-        INSERT INTO "TutoringRequest" ("id","parentProfileId","studentProfileId","title","description","status","publishedAt","createdAt","updatedAt")
-        VALUES
-          ($1,$3,$4,'Legacy request','Preserve me','PUBLISHED',$6,$6,$6),
-          ($2,$3,$5,'Vue.js tutoring','Learn signal processing','PUBLISHED',$6,$6,$6)
-      `, [unsafeRequestId, safeRequestId, parentProfileId, unsafeStudentId, safeStudentId, stamp]);
+      for (const student of Object.values(students)) {
+        await client.query(`
+          INSERT INTO "StudentProfile" ("id","parentProfileId","displayName","gradeLevel","isActive","createdAt","updatedAt")
+          VALUES ($1,$2,$3,'GRADE_8',$4,$5,$5)
+        `, [student.id, parentProfileId, student.displayName, student.isActive, stamp]);
+      }
+      for (const request of requestFixtures) {
+        await client.query(`
+          INSERT INTO "TutoringRequest" ("id","parentProfileId","studentProfileId","title","description","status","publishedAt","createdAt","updatedAt")
+          VALUES ($1,$2,$3,$4,$5,'PUBLISHED',$6,$6,$6)
+        `, [request.id, parentProfileId, request.studentId, request.title, request.description, stamp]);
+      }
 
       copyMigrations(root, MIGRATIONS.length);
       expectPrismaSuccess(runPrisma(root, database.url, ["migrate", "deploy"]));
       const teachers = await client.query(`SELECT "id","status","publishedAt","publicContentSafetyVersion" FROM "TeacherProfile" ORDER BY "id"`);
       const teacherById = new Map(teachers.rows.map((row) => [row.id, row]));
-      for (const unsafe of unsafeTeachers) {
-        expect(teacherById.get(unsafe.profileId)).toMatchObject({ status: "DRAFT", publishedAt: null, publicContentSafetyVersion: 0 });
+      for (const teacher of teacherFixtures) {
+        expect(teacherById.get(teacher.profileId), teacher.key).toMatchObject({
+          status: teacher.expectedStatus,
+          publishedAt: teacher.expectedStatus === "PUBLISHED" ? stamp : null,
+          publicContentSafetyVersion: teacher.expectedVersion,
+        });
       }
-      expect(teacherById.get(safeTeacherProfileId)).toMatchObject({ status: "PUBLISHED", publishedAt: stamp, publicContentSafetyVersion: 1 });
       const requests = await client.query(`SELECT "id","status","publishedAt","publicContentSafetyVersion" FROM "TutoringRequest" ORDER BY "id"`);
       const requestById = new Map(requests.rows.map((row) => [row.id, row]));
-      expect(requestById.get(unsafeRequestId)).toMatchObject({ status: "DRAFT", publishedAt: null, publicContentSafetyVersion: 0 });
-      expect(requestById.get(safeRequestId)).toMatchObject({ status: "PUBLISHED", publishedAt: stamp, publicContentSafetyVersion: 1 });
+      for (const request of requestFixtures) {
+        expect(requestById.get(request.id), request.key).toMatchObject({
+          status: request.expectedStatus,
+          publishedAt: request.expectedStatus === "PUBLISHED" ? stamp : null,
+          publicContentSafetyVersion: request.expectedVersion,
+        });
+      }
     } finally {
       await client.end().catch(() => undefined);
       await cleanupMigrationWorkspace(root);
     }
-  }, 60_000);
+  }, 90_000);
 
   it("upgrades valid legacy greetings and conversations without deleting data", async () => {
     const database = await createDatabase();

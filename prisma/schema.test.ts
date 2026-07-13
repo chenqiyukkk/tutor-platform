@@ -156,6 +156,14 @@ describe("public content safety migration", () => {
     expect(sql).toContain("13800138000");
     expect(sql).toMatch(/FF01|fullwidth|Ｗ/u);
     expect(sql).toMatch(/200B|zero.width|8203/iu);
+    expect(sql.indexOf("regexp_replace")).toBeLessThan(sql.indexOf("normalize("));
+    for (const fragment of ["w[[:space:]]*x", "q[[:space:]]*q", "扣[[:space:]]*扣", "t[[:space:]]*g", "付[[:space:]]*(信息|中介)", "私聊发"]) {
+      expect(sql).toContain(fragment);
+    }
+    expect(sql).toContain('btrim("displayName") = \'\'');
+    expect(sql).toContain('btrim("bio") = \'\'');
+    expect(sql).toContain('NOT EXISTS (');
+    expect(sql).toContain('"StudentProfile"."isActive" = true');
   });
 
   it("persists a current safety version for database-first public pagination", () => {
@@ -170,5 +178,20 @@ describe("public content safety migration", () => {
     expect(sql).toContain('UPDATE "TeacherProfile"');
     expect(sql).toContain('UPDATE "TutoringRequest"');
     expect(sql).toContain('"publicContentSafetyVersion" = 1');
+    expect(sql.indexOf("regexp_replace")).toBeLessThan(sql.indexOf("normalize("));
+    expect(sql).toContain('btrim("displayName") <> \'\'');
+    expect(sql).toContain('btrim("bio") <> \'\'');
+    expect(sql).toContain('btrim(request."title") <> \'\'');
+    expect(sql).toContain('btrim(request."description") <> \'\'');
+    expect(sql).toContain('"StudentProfile"."isActive" = true');
+
+    const safetySql = readFileSync(
+      join(migrationsDirectory, "20260713133400_public_content_safety", "migration.sql"),
+      "utf8",
+    );
+    const extractFunction = (migration: string) => migration.match(
+      /CREATE FUNCTION "public_content_unsafe_v1"[\s\S]*?\$function\$;/,
+    )?.[0];
+    expect(extractFunction(sql)).toBe(extractFunction(safetySql));
   });
 });
