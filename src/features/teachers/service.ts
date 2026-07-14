@@ -62,7 +62,8 @@ export type TeacherProfileErrorCode =
   | "INVALID_SUBJECT"
   | "INVALID_REGION"
   | "INCOMPLETE_PROFILE"
-  | "NOT_FOUND";
+  | "NOT_FOUND"
+  | "CONFLICT";
 
 export class TeacherProfileError extends Error {
   constructor(

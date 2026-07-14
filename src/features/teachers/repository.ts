@@ -67,11 +67,12 @@ export class PrismaTeacherProfileRepository implements TeacherProfileRepository 
 
   async saveOwned(accountId: string, input: SavedTeacherProfile) {
     return this.prisma.$transaction(async (transaction) => {
+      await transaction.$queryRaw`SELECT "id" FROM "Account" WHERE "id" = ${accountId}::uuid FOR UPDATE`;
       const account = await transaction.account.findUnique({
         where: { id: accountId },
-        select: { role: true },
+        select: { role: true, status: true },
       });
-      if (!account || account.role !== "TEACHER") {
+      if (!account || account.role !== "TEACHER" || account.status !== "ACTIVE") {
         throw new TeacherProfileError("FORBIDDEN", "仅教师账号可管理教师资料");
       }
 
@@ -133,6 +134,8 @@ export class PrismaTeacherProfileRepository implements TeacherProfileRepository 
           status: "DRAFT",
           publishedAt: null,
           publicContentSafetyVersion: 0,
+          moderationRejectedAt: null,
+          moderationReason: null,
         },
         select: { id: true },
       });
@@ -160,6 +163,12 @@ export class PrismaTeacherProfileRepository implements TeacherProfileRepository 
 
   async setPublished(accountId: string, published: boolean) {
     return this.prisma.$transaction(async (transaction) => {
+      await transaction.$queryRaw`SELECT "id" FROM "Account" WHERE "id" = ${accountId}::uuid FOR UPDATE`;
+      const account = await transaction.account.findFirst({
+        where: { id: accountId, role: "TEACHER", status: "ACTIVE" },
+        select: { id: true },
+      });
+      if (!account) throw new TeacherProfileError("FORBIDDEN", "仅有效教师账号可管理教师资料");
       await transaction.$queryRaw<Array<{ id: string }>>`
         SELECT "id"
         FROM "TeacherProfile"
@@ -169,6 +178,9 @@ export class PrismaTeacherProfileRepository implements TeacherProfileRepository 
       let current = await findOwned(transaction, accountId);
       if (!current) throw new TeacherProfileError("NOT_FOUND", "教师资料不存在");
       if (published) {
+        if (current.moderationRejectedAt) {
+          throw new TeacherProfileError("CONFLICT", "请先编辑被下架的教师资料再重新发布");
+        }
         const subjectIds = current.subjects.map(({ subjectId }) => subjectId).sort();
         const regionIds = current.serviceAreas.map(({ regionId }) => regionId).sort();
         // Task 12 must lock Subject IDs, then Region IDs in this same sorted order and

@@ -53,8 +53,9 @@ function assertSafeStudentAlias(publicAlias: string) {
 }
 
 async function parentProfile(client: Client, accountId: string) {
-  const account = await client.account.findUnique({ where: { id: accountId }, select: { role: true, username: true } });
-  if (!account || account.role !== "PARENT") throw new RequestWorkflowError("FORBIDDEN", "仅家长账号可管理学生与家教需求");
+  await client.$queryRaw`SELECT "id" FROM "Account" WHERE "id" = ${accountId}::uuid FOR UPDATE`;
+  const account = await client.account.findUnique({ where: { id: accountId }, select: { role: true, status: true, username: true } });
+  if (!account || account.role !== "PARENT" || account.status !== "ACTIVE") throw new RequestWorkflowError("FORBIDDEN", "仅有效家长账号可管理学生与家教需求");
   const [profile] = await client.$queryRaw<Array<{ id: string }>>`
     INSERT INTO "ParentProfile" ("id", "accountId", "displayName", "updatedAt")
     VALUES (${crypto.randomUUID()}::uuid, ${accountId}::uuid, ${account.username}, now())
@@ -135,6 +136,9 @@ export class PrismaRequestRepository implements RequestRepository {
 
   async updateStudent(accountId: string, id: string, input: Omit<Student, "id" | "isActive">) {
     return this.prisma.$transaction(async (transaction) => {
+      await transaction.$queryRaw`SELECT "id" FROM "Account" WHERE "id" = ${accountId}::uuid FOR UPDATE`;
+      const account = await transaction.account.findFirst({ where: { id: accountId, role: "PARENT", status: "ACTIVE" }, select: { id: true } });
+      if (!account) throw new RequestWorkflowError("FORBIDDEN", "仅有效家长账号可管理学生档案");
       await transaction.$queryRaw`
         SELECT request."id" FROM "TutoringRequest" request
         WHERE request."studentProfileId" = ${id}::uuid
@@ -162,6 +166,9 @@ export class PrismaRequestRepository implements RequestRepository {
 
   async deactivateStudent(accountId: string, id: string) {
     await this.prisma.$transaction(async (transaction) => {
+      await transaction.$queryRaw`SELECT "id" FROM "Account" WHERE "id" = ${accountId}::uuid FOR UPDATE`;
+      const account = await transaction.account.findFirst({ where: { id: accountId, role: "PARENT", status: "ACTIVE" }, select: { id: true } });
+      if (!account) throw new RequestWorkflowError("FORBIDDEN", "仅有效家长账号可管理学生档案");
       const owned = await transaction.studentProfile.findFirst({ where: { id, parentProfile: { accountId }, isActive: true }, select: { id: true } });
       if (!owned) throw new RequestWorkflowError("NOT_FOUND", "学生档案不存在");
       await transaction.$queryRaw`
@@ -210,6 +217,9 @@ export class PrismaRequestRepository implements RequestRepository {
 
   async updateRequest(accountId: string, id: string, input: DraftValues) {
     return this.prisma.$transaction(async (transaction) => {
+      await transaction.$queryRaw`SELECT "id" FROM "Account" WHERE "id" = ${accountId}::uuid FOR UPDATE`;
+      const account = await transaction.account.findFirst({ where: { id: accountId, role: "PARENT", status: "ACTIVE" }, select: { id: true } });
+      if (!account) throw new RequestWorkflowError("FORBIDDEN", "仅有效家长账号可管理家教需求");
       const locked = await transaction.$queryRaw<Array<{ id: string; parentProfileId: string; status: string }>>`
         SELECT request."id", request."parentProfileId", request."status"::text
         FROM "TutoringRequest" request
@@ -222,7 +232,10 @@ export class PrismaRequestRepository implements RequestRepository {
       if (current.status === "CLOSED") throw new RequestWorkflowError("CONFLICT", "已关闭的需求不可编辑");
       await validateReferences(transaction, current.parentProfileId, input);
       await transaction.requestSubject.deleteMany({ where: { tutoringRequestId: id } });
-      await transaction.tutoringRequest.update({ where: { id }, data: { ...requestData(input), status: "DRAFT", publishedAt: null, closedAt: null, publicContentSafetyVersion: 0 } });
+      await transaction.tutoringRequest.update({ where: { id }, data: {
+        ...requestData(input), status: "DRAFT", publishedAt: null, closedAt: null,
+        publicContentSafetyVersion: 0, moderationRejectedAt: null, moderationReason: null,
+      } });
       if (input.subjectIds.length) await transaction.requestSubject.createMany({ data: input.subjectIds.map((subjectId) => ({ tutoringRequestId: id, subjectId })) });
       const row = await findOwnedRequestSequential(transaction, accountId, id);
       if (!row) throw new RequestWorkflowError("NOT_FOUND", "需求不存在");
@@ -232,6 +245,9 @@ export class PrismaRequestRepository implements RequestRepository {
 
   async publishRequest(accountId: string, id: string) {
     return this.prisma.$transaction(async (transaction) => {
+      await transaction.$queryRaw`SELECT "id" FROM "Account" WHERE "id" = ${accountId}::uuid FOR UPDATE`;
+      const account = await transaction.account.findFirst({ where: { id: accountId, role: "PARENT", status: "ACTIVE" }, select: { id: true } });
+      if (!account) throw new RequestWorkflowError("FORBIDDEN", "仅有效家长账号可管理家教需求");
       const lock = await transaction.$queryRaw<Array<{ id: string }>>`
         SELECT request."id" FROM "TutoringRequest" request
         JOIN "ParentProfile" parent ON parent."id" = request."parentProfileId"
@@ -242,6 +258,7 @@ export class PrismaRequestRepository implements RequestRepository {
       let current = await findOwnedRequestSequential(transaction, accountId, id);
       if (!current) throw new RequestWorkflowError("NOT_FOUND", "需求不存在");
       if (current.status === "CLOSED") throw new RequestWorkflowError("CONFLICT", "已关闭的需求不可再次发布");
+      if (current.moderationRejectedAt) throw new RequestWorkflowError("CONFLICT", "请先编辑被下架的家教需求再重新发布");
       const subjectIds = current.subjects.map(({ subjectId }) => subjectId).sort();
       if (subjectIds.length) {
         await transaction.$queryRaw`SELECT "id" FROM "Subject" WHERE "id" IN (${Prisma.join(subjectIds)}) ORDER BY "id" FOR SHARE`;
@@ -272,6 +289,9 @@ export class PrismaRequestRepository implements RequestRepository {
 
   async closeRequest(accountId: string, id: string) {
     return this.prisma.$transaction(async (transaction) => {
+      await transaction.$queryRaw`SELECT "id" FROM "Account" WHERE "id" = ${accountId}::uuid FOR UPDATE`;
+      const account = await transaction.account.findFirst({ where: { id: accountId, role: "PARENT", status: "ACTIVE" }, select: { id: true } });
+      if (!account) throw new RequestWorkflowError("FORBIDDEN", "仅有效家长账号可管理家教需求");
       const locked = await transaction.$queryRaw<Array<{ id: string; status: string }>>`
         SELECT request."id", request."status"::text FROM "TutoringRequest" request
         JOIN "ParentProfile" parent ON parent."id" = request."parentProfileId"

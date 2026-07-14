@@ -265,4 +265,30 @@ describe("Prisma parent request repository", () => {
     await expect(repository.findRequest(parentA.id, draft.id)).resolves.toMatchObject({ budgetMinCents: 8_000 });
     expect(RequestWorkflowError).toBeDefined();
   });
+
+  it("requires an owner edit to clear a request moderation hold and rejects suspended-owner writes", async () => {
+    const { caller, student, input } = await requestFixture("hold");
+    const draft = await service.createDraft(caller, input);
+    await prisma.tutoringRequest.update({ where: { id: draft.id }, data: {
+      moderationRejectedAt: new Date(),
+      moderationReason: "公开内容需修改",
+    } });
+    await expect(repository.publishRequest(caller.id, draft.id)).rejects.toMatchObject({ code: "CONFLICT" });
+    await expect(prisma.tutoringRequest.findUniqueOrThrow({ where: { id: draft.id } }))
+      .resolves.toMatchObject({ moderationReason: "公开内容需修改", status: "DRAFT" });
+
+    await repository.updateRequest(caller.id, draft.id, { ...input, description: "已完成一次合成内容修改" });
+    await expect(prisma.tutoringRequest.findUniqueOrThrow({ where: { id: draft.id } }))
+      .resolves.toMatchObject({ moderationRejectedAt: null, moderationReason: null });
+    await expect(repository.publishRequest(caller.id, draft.id)).resolves.toMatchObject({ status: "PUBLISHED" });
+
+    await prisma.account.update({ where: { id: caller.id }, data: { status: "SUSPENDED" } });
+    await expect(repository.updateRequest(caller.id, draft.id, input)).rejects.toMatchObject({ code: "FORBIDDEN" });
+    await expect(repository.publishRequest(caller.id, draft.id)).rejects.toMatchObject({ code: "FORBIDDEN" });
+    await expect(repository.updateStudent(caller.id, student.id, {
+      publicAlias: "停用后不可编辑", grade: student.grade, notes: null,
+    })).rejects.toMatchObject({ code: "FORBIDDEN" });
+    await expect(repository.deactivateStudent(caller.id, student.id)).rejects.toMatchObject({ code: "FORBIDDEN" });
+    await expect(repository.closeRequest(caller.id, draft.id)).rejects.toMatchObject({ code: "FORBIDDEN" });
+  });
 });

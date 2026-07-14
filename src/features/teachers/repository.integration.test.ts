@@ -285,4 +285,60 @@ describe("Prisma teacher profile repository", () => {
     expect(persisted.hourlyRate?.toNumber()).toBe(0);
     expect(persisted.hourlyRateMax?.toNumber()).toBe(1000);
   });
+
+  it("requires an owner edit to clear a moderation hold and rejects suspended-owner writes", async () => {
+    const account = await prisma.account.create({ data: {
+      role: "TEACHER",
+      username: `teacher-hold-${marker}`,
+      normalizedUsername: `teacher-hold-${marker}`,
+      email: `teacher-hold-${marker}@example.test`,
+      normalizedEmail: `teacher-hold-${marker}@example.test`,
+      passwordHash: "integration-only",
+    } });
+    accountIds.push(account.id);
+    const subject = await prisma.subject.create({ data: { name: `持有科目-${marker}`, slug: `${marker}-hold-subject` } });
+    subjectIds.push(subject.id);
+    const region = await prisma.region.create({ data: { code: `TH${marker}`, name: "持有测试区", level: 3 } });
+    regionIds.push(region.id);
+    const profile = await prisma.teacherProfile.create({ data: {
+      accountId: account.id,
+      displayName: "持有测试老师",
+      headline: "认真负责的测试老师",
+      identityType: "FULL_TIME_TEACHER",
+      bio: "这是只用于测试的完整教师简介内容，不包含任何真实个人资料。",
+      yearsExperience: 3,
+      hourlyRate: 100,
+      hourlyRateMax: 150,
+      status: "DRAFT",
+      moderationRejectedAt: new Date(),
+      moderationReason: "公开内容需修改",
+      subjects: { create: { subjectId: subject.id } },
+      serviceAreas: { create: { regionId: region.id, isPrimary: true } },
+    } });
+    await expect(repository.setPublished(account.id, true)).rejects.toMatchObject({ code: "CONFLICT" });
+    await expect(prisma.teacherProfile.findUniqueOrThrow({ where: { id: profile.id } }))
+      .resolves.toMatchObject({ moderationReason: "公开内容需修改", status: "DRAFT" });
+
+    const saved = {
+      publicNickname: "持有测试老师",
+      headline: "认真负责的测试老师",
+      identityType: "FULL_TIME_TEACHER" as const,
+      bio: "这是只用于测试的完整教师简介内容，不包含任何真实个人资料。",
+      yearsExperience: 3,
+      online: false,
+      rateMinCents: 10_000,
+      rateMaxCents: 15_000,
+      subjectIds: [subject.id],
+      primaryRegionId: region.id,
+      extraRegionIds: [],
+    };
+    await repository.saveOwned(account.id, saved);
+    await expect(prisma.teacherProfile.findUniqueOrThrow({ where: { id: profile.id } }))
+      .resolves.toMatchObject({ moderationRejectedAt: null, moderationReason: null });
+    await expect(repository.setPublished(account.id, true)).resolves.toMatchObject({ status: "PUBLISHED" });
+
+    await prisma.account.update({ where: { id: account.id }, data: { status: "SUSPENDED" } });
+    await expect(repository.saveOwned(account.id, saved)).rejects.toMatchObject({ code: "FORBIDDEN" });
+    await expect(repository.setPublished(account.id, true)).rejects.toMatchObject({ code: "FORBIDDEN" });
+  });
 });
