@@ -1,7 +1,9 @@
 BEGIN;
 
--- Block report writers before validating legacy rows so no invalid target can race the preflight.
-LOCK TABLE "Report" IN SHARE ROW EXCLUSIVE MODE;
+-- Take the final DDL lock up front. This blocks Report reads and writes for the
+-- migration duration, but avoids a SHARE ROW EXCLUSIVE -> ACCESS EXCLUSIVE
+-- upgrade deadlock with transactions that read Report before writing it.
+LOCK TABLE "Report" IN ACCESS EXCLUSIVE MODE;
 
 DO $moderation_report_target_preflight$
 BEGIN
@@ -172,6 +174,11 @@ $audit_append_only$;
 CREATE TRIGGER "AdminAuditLog_append_only"
 BEFORE UPDATE OR DELETE ON "AdminAuditLog"
 FOR EACH ROW
+EXECUTE FUNCTION "reject_admin_audit_log_mutation"();
+
+CREATE TRIGGER "AdminAuditLog_append_only_truncate"
+BEFORE TRUNCATE ON "AdminAuditLog"
+FOR EACH STATEMENT
 EXECUTE FUNCTION "reject_admin_audit_log_mutation"();
 
 COMMIT;

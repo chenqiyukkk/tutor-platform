@@ -1,7 +1,7 @@
 // @vitest-environment node
 
 import { randomUUID } from "node:crypto";
-import { copyFileSync, existsSync, mkdirSync, mkdtempSync, readdirSync, rmSync, writeFileSync } from "node:fs";
+import { copyFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { basename, isAbsolute, join, relative, resolve } from "node:path";
 import { loadEnvFile } from "node:process";
@@ -34,9 +34,16 @@ const MIGRATIONS = [
   "20260713133800_chat_message_change_version",
   MODERATION_MIGRATION,
 ] as const;
-const TEMP_WORKSPACE_ROOT = join(tmpdir(), "tutor-platform-moderation-migrations");
+const TEMP_WORKSPACE_PARENT = join(tmpdir(), "tutor-platform-moderation-migrations");
+const SUITE_ID = `${process.pid}-${randomUUID().replaceAll("-", "")}`;
+const TEMP_WORKSPACE_ROOT = join(TEMP_WORKSPACE_PARENT, `suite-${SUITE_ID}`);
+const FOREIGN_WORKSPACE_ROOT = join(TEMP_WORKSPACE_PARENT, `run-foreign-${process.pid}-${randomUUID()}`);
+const FOREIGN_WORKSPACE_SENTINEL = join(FOREIGN_WORKSPACE_ROOT, "owner.txt");
+mkdirSync(FOREIGN_WORKSPACE_ROOT, { recursive: true });
+writeFileSync(FOREIGN_WORKSPACE_SENTINEL, "owned by another suite");
 const prismaCli = join(process.cwd(), "node_modules", "prisma", "build", "index.js");
 const tempRoots: string[] = [];
+const fixtureRoots = [FOREIGN_WORKSPACE_ROOT];
 const databases: string[] = [];
 const adminPool = new Pool({ connectionString: process.env.DATABASE_URL });
 let invariantDatabase: { name: string; url: string } | undefined;
@@ -126,6 +133,17 @@ async function cleanupMigrationWorkspace(root: string) {
   return false;
 }
 
+async function cleanupSuiteWorkspaceRoot() {
+  const candidate = resolve(TEMP_WORKSPACE_ROOT);
+  if (candidate !== resolve(join(TEMP_WORKSPACE_PARENT, `suite-${SUITE_ID}`))) return false;
+  for (let attempt = 0; attempt < 10; attempt += 1) {
+    rmSync(candidate, { recursive: true, force: true, maxRetries: 2, retryDelay: 50 });
+    if (!existsSync(candidate)) return true;
+    await delay(100);
+  }
+  return false;
+}
+
 async function insertAccount(client: Client, role: "ADMIN" | "PARENT" | "TEACHER", label: string) {
   const id = randomUUID();
   await client.query(`
@@ -209,9 +227,6 @@ async function seedLegacyReports(client: Client) {
 
 beforeAll(async () => {
   mkdirSync(TEMP_WORKSPACE_ROOT, { recursive: true });
-  for (const entry of readdirSync(TEMP_WORKSPACE_ROOT, { withFileTypes: true })) {
-    if (entry.isDirectory()) await cleanupMigrationWorkspace(join(TEMP_WORKSPACE_ROOT, entry.name));
-  }
   if (!migrationExists()) return;
   invariantDatabase = await createDatabase();
   invariantRoot = createMigrationWorkspace(MIGRATIONS.length);
@@ -225,9 +240,21 @@ afterAll(async () => {
   }
   await adminPool.end();
   for (const root of tempRoots) await cleanupMigrationWorkspace(root);
+  await cleanupSuiteWorkspaceRoot();
+  for (const root of fixtureRoots) rmSync(root, { recursive: true, force: true });
 });
 
 describe("moderation workflow migration", () => {
+  it("uses a process-unique suite root and never removes another suite's run directory", () => {
+    try {
+      expect.soft(existsSync(FOREIGN_WORKSPACE_SENTINEL)).toBe(true);
+      expect.soft(basename(TEMP_WORKSPACE_ROOT)).toMatch(new RegExp(`^suite-${process.pid}-[a-f0-9]{32}$`));
+      expect.soft(isSafeMigrationWorkspace(FOREIGN_WORKSPACE_ROOT)).toBe(false);
+    } finally {
+      rmSync(FOREIGN_WORKSPACE_ROOT, { recursive: true, force: true });
+    }
+  });
+
   it("deploys all 18 migrations into an empty database with datasource-to-schema parity", async () => {
     expect(migrationExists()).toBe(true);
     if (!invariantDatabase || !invariantRoot) return;
@@ -251,6 +278,89 @@ describe("moderation workflow migration", () => {
       await client.end().catch(() => undefined);
     }
   }, 90_000);
+
+  it("takes the final Report lock up front without deadlocking a concurrent read-then-write transaction", async () => {
+    expect(migrationExists()).toBe(true);
+    if (!migrationExists()) return;
+    const database = await createDatabase();
+    const root = createMigrationWorkspace(MIGRATIONS.length - 1);
+    const reader = new Client({ connectionString: database.url });
+    const migrator = new Client({ connectionString: database.url });
+    const observer = new Client({ connectionString: database.url });
+    let migration: Promise<unknown> | undefined;
+    try {
+      expectPrismaSuccess(runPrisma(root, database.url, ["migrate", "deploy"]));
+      await Promise.all([reader.connect(), migrator.connect(), observer.connect()]);
+      await reader.query("BEGIN");
+      await reader.query("SET LOCAL lock_timeout = '3s'");
+      await reader.query(`SELECT count(*) FROM "Report"`);
+
+      const beforeDeadlocks = Number((await adminPool.query(
+        `SELECT deadlocks FROM pg_stat_database WHERE datname = $1`,
+        [database.name],
+      )).rows[0].deadlocks);
+      const migrationSql = readFileSync(
+        join(process.cwd(), "prisma", "migrations", MODERATION_MIGRATION, "migration.sql"),
+        "utf8",
+      );
+      const initialLock = migrationSql.match(/LOCK TABLE "Report" IN (.+) MODE;/)?.[1];
+      expect(["SHARE ROW EXCLUSIVE", "ACCESS EXCLUSIVE"]).toContain(initialLock);
+      const expectedMode = initialLock === "ACCESS EXCLUSIVE" ? "AccessExclusiveLock" : "ShareRowExclusiveLock";
+      const expectedGranted = initialLock !== "ACCESS EXCLUSIVE";
+      const migratorPid = Number((await migrator.query(`SELECT pg_backend_pid() AS pid`)).rows[0].pid);
+      migration = migrator.query(migrationSql);
+
+      let observedInitialLock = false;
+      const lockDeadline = Date.now() + 5_000;
+      while (Date.now() < lockDeadline) {
+        const locks = await observer.query<{ granted: boolean }>(`
+          SELECT granted FROM pg_locks
+          WHERE pid = $1
+            AND relation = '"Report"'::regclass
+            AND mode = $2
+            AND granted = $3
+        `, [migratorPid, expectedMode, expectedGranted]);
+        if (locks.rowCount) {
+          observedInitialLock = true;
+          break;
+        }
+        await delay(10);
+      }
+      expect(observedInitialLock).toBe(true);
+
+      const write = reader.query(`UPDATE "Report" SET "updatedAt" = "updatedAt"`)
+        .then(async () => {
+          await reader.query("COMMIT");
+          return { status: "completed" as const };
+        })
+        .catch(async (error: { code?: string }) => {
+          await reader.query("ROLLBACK");
+          return { status: "failed" as const, code: error.code };
+        });
+      const migrationOutcome = migration
+        .then(() => ({ status: "completed" as const }))
+        .catch((error: { code?: string }) => ({ status: "failed" as const, code: error.code }));
+      const [migrationResult, writeResult] = await Promise.all([migrationOutcome, write]);
+      const afterDeadlocks = Number((await adminPool.query(
+        `SELECT deadlocks FROM pg_stat_database WHERE datname = $1`,
+        [database.name],
+      )).rows[0].deadlocks);
+
+      expect(migrationResult).toEqual({ status: "completed" });
+      expect(writeResult).not.toMatchObject({ code: "40P01" });
+      expect(writeResult.status === "completed" || writeResult.code === "55P03").toBe(true);
+      expect(afterDeadlocks).toBe(beforeDeadlocks);
+    } finally {
+      await reader.query("ROLLBACK").catch(() => undefined);
+      await migration?.catch(() => undefined);
+      await Promise.all([
+        reader.end().catch(() => undefined),
+        migrator.end().catch(() => undefined),
+        observer.end().catch(() => undefined),
+      ]);
+      await cleanupMigrationWorkspace(root);
+    }
+  }, 30_000);
 
   it("backfills legacy reports from the most specific canonical target", async () => {
     expect(migrationExists()).toBe(true);
@@ -485,6 +595,21 @@ describe("moderation workflow migration", () => {
       `, [secondAuditId, adminId, randomUUID()]);
       await expect(client.query(`DELETE FROM "AdminAuditLog" WHERE "id" = $1`, [secondAuditId]))
         .rejects.toMatchObject({ code: "55000" });
+      await client.query("ROLLBACK");
+    } finally {
+      await client.query("ROLLBACK").catch(() => undefined);
+      await client.end().catch(() => undefined);
+    }
+  }, 30_000);
+
+  it("rejects audit truncation with SQLSTATE 55000", async () => {
+    expect(migrationExists()).toBe(true);
+    if (!invariantDatabase) return;
+    const client = new Client({ connectionString: invariantDatabase.url });
+    try {
+      await client.connect();
+      await client.query("BEGIN");
+      await expect(client.query(`TRUNCATE "AdminAuditLog"`)).rejects.toMatchObject({ code: "55000" });
       await client.query("ROLLBACK");
     } finally {
       await client.query("ROLLBACK").catch(() => undefined);

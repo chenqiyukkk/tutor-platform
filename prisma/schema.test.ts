@@ -308,7 +308,8 @@ describe("moderation workflow schema", () => {
     const sql = readFileSync(join(migrationsDirectory, moderationMigration.name, "migration.sql"), "utf8");
     expect(sql.trimStart().startsWith("BEGIN;")).toBe(true);
     expect(sql.trimEnd().endsWith("COMMIT;")).toBe(true);
-    expect(sql).toContain('LOCK TABLE "Report" IN SHARE ROW EXCLUSIVE MODE');
+    expect(sql).toContain('LOCK TABLE "Report" IN ACCESS EXCLUSIVE MODE');
+    expect(sql).not.toContain('LOCK TABLE "Report" IN SHARE ROW EXCLUSIVE MODE');
     const preflight = sql.indexOf("moderation_report_target_preflight");
     const firstPersistentDdl = Math.min(
       ...[sql.indexOf('CREATE TYPE "ReportTargetType"'), sql.indexOf('ALTER TABLE "Report"')]
@@ -330,6 +331,8 @@ describe("moderation workflow schema", () => {
     expect(sql).toContain('CONSTRAINT "Report_no_self_report_check"');
     expect(sql).toContain('CONSTRAINT "Report_target_shape_check"');
     expect(sql).toContain('CREATE TRIGGER "AdminAuditLog_append_only"');
+    expect(sql).toContain('CREATE TRIGGER "AdminAuditLog_append_only_truncate"');
+    expect(sql).toMatch(/BEFORE TRUNCATE ON "AdminAuditLog"\s+FOR EACH STATEMENT/);
     expect(sql).toContain("ERRCODE = '55000'");
   });
 });
