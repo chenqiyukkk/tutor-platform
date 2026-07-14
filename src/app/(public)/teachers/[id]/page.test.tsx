@@ -54,6 +54,7 @@ describe("teacher public detail page", () => {
     expect(screen.getByRole("heading", { name: "林老师" })).toBeInTheDocument();
     expect(screen.queryByText("私密教师自述")).not.toBeInTheDocument();
     expect(screen.getByRole("link", { name: "家长登录后联系老师" })).toHaveAttribute("href", "/parent/login");
+    expect(screen.queryByRole("button", { name: "举报此内容" })).not.toBeInTheDocument();
     expect(mocks.detail).not.toHaveBeenCalled();
   });
 
@@ -65,6 +66,8 @@ describe("teacher public detail page", () => {
     expect(screen.getByText("私密教师自述")).toBeInTheDocument();
     expect(screen.queryByRole("link", { name: /登录后/ })).not.toBeInTheDocument();
     expect(screen.getByText("先发布一条有效需求")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "举报此内容" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "屏蔽对方" })).toBeInTheDocument();
     expect(mocks.preview).not.toHaveBeenCalled();
   });
 });

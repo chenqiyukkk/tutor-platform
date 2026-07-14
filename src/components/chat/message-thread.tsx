@@ -1,5 +1,7 @@
 import type { Ref } from "react";
 
+import { SafetyActionDialog } from "@/components/moderation/safety-action-dialog";
+
 import type { ConversationItem, DisplayMessage } from "./types";
 
 function timeLabel(value: string) {
@@ -20,6 +22,7 @@ export function MessageThread({
   loadingOlder,
   olderError,
   messages,
+  realm,
   onBack,
   onBlock,
   onLoadOlder,
@@ -33,6 +36,7 @@ export function MessageThread({
   loadingOlder: boolean;
   olderError: boolean;
   messages: DisplayMessage[];
+  realm: "parent" | "teacher";
   onBack(): void;
   onBlock(): void;
   onLoadOlder(): void;
@@ -109,6 +113,7 @@ export function MessageThread({
                       </button>
                     ) : null}
                     {!message.delivery && message.mine ? <span>{message.readAt ? "已读" : "已送达"}</span> : null}
+                    {!message.mine && !message.delivery ? <SafetyActionDialog actions={["report"]} realm={realm} reportLabel="举报这条消息" target={{ kind: "message", messageId: message.id }} /> : null}
                   </footer>
                 </article>
               </li>

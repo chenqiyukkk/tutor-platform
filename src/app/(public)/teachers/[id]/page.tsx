@@ -6,6 +6,7 @@ import { z } from "zod";
 import { CircleRibbon } from "@/components/directory/circle-ribbon";
 import { DirectoryContactCta } from "@/components/directory/contact-cta";
 import { GreetingComposer } from "@/components/greetings/greeting-composer";
+import { SafetyActionDialog } from "@/components/moderation/safety-action-dialog";
 import { resolveTeacherCircleTier } from "@/features/directory/circle";
 import { formatDirectoryDate } from "@/features/directory/date";
 import { getAdjacentRegionPairs, getDirectoryAccessContext } from "@/features/directory/personalization";
@@ -44,7 +45,7 @@ export default async function TeacherDetailPage({ params }: { params: Promise<{ 
           <section><p className="eyebrow">科目与地区</p><div className="directory-detail__columns"><div><h2>授课科目</h2><ul className="directory-tags">{teacher.subjects.map((subject) => <li key={subject.id}>{subject.name}</li>)}</ul></div><div><h2>服务区县</h2><ul className="directory-area-list">{teacher.serviceAreas.map((area) => <li key={area.id}><strong>{area.name}</strong>{area.isPrimary ? <span>主要地区</span> : null}</li>)}</ul></div></div></section>
           <footer>发布于 {teacher.publishedAt ? formatDirectoryDate(teacher.publishedAt) : "未知日期"} · 平台不会展示证件材料或联系方式</footer>
         </article>
-        {access.authenticated ? <GreetingComposer realm="parent" requestOptions={greetingRequests} targetId={teacher.id} /> : <DirectoryContactCta kind="teacher" />}
+        {access.authenticated ? <div className="directory-detail__rail"><GreetingComposer realm="parent" requestOptions={greetingRequests} targetId={teacher.id} /><aside className="directory-safety" aria-label="资料安全操作"><p>发现不实信息或不希望继续联系？举报与屏蔽需要分别确认。</p><SafetyActionDialog realm="parent" target={{ kind: "teacher_profile", profileId: teacher.id }} /></aside></div> : <DirectoryContactCta kind="teacher" />}
       </div>
     </main>
   );

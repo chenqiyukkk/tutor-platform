@@ -849,6 +849,49 @@ describe("ChatWorkspace", () => {
     }
   });
 
+  it("offers generic reporting only on counterpart messages and sends the message locator", async () => {
+    const originalShowModal = Object.getOwnPropertyDescriptor(HTMLDialogElement.prototype, "showModal");
+    const originalClose = Object.getOwnPropertyDescriptor(HTMLDialogElement.prototype, "close");
+    Object.defineProperty(HTMLDialogElement.prototype, "showModal", { configurable: true, value(this: HTMLDialogElement) { this.setAttribute("open", ""); } });
+    Object.defineProperty(HTMLDialogElement.prototype, "close", { configurable: true, value(this: HTMLDialogElement) { this.removeAttribute("open"); this.dispatchEvent(new Event("close")); } });
+    const counterpart = message({ id: "90000000-0000-4000-8000-000000000001", body: "对方消息" });
+    const mine = message({ id: "90000000-0000-4000-8000-000000000002", clientMessageId: "90000000-0000-4000-8000-000000000003", body: "我的消息", mine: true });
+    let reportBody: unknown;
+    const fetchMock = vi.fn<(input: RequestInfo | URL, init?: RequestInit) => Promise<Response>>(async (input, init) => {
+      const url = String(input);
+      if (url.startsWith("/api/conversations?")) return conversationsResponse([conversationA]);
+      if (url.startsWith("/api/reports?")) {
+        reportBody = JSON.parse(String(init?.body));
+        return Response.json({ reportId: "safe", status: "PENDING" }, { status: 201 });
+      }
+      if (url.includes("/messages?")) return messagesResponse([counterpart, mine]);
+      return Response.json({ readCount: 1, readAt: "2026-07-13T12:01:00.000Z" });
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    try {
+      render(<ChatWorkspace realm="teacher" />);
+      const report = await screen.findByRole("button", { name: "举报这条消息" });
+      expect(within(screen.getByText("对方消息").closest("li")!).getByRole("button", { name: "举报这条消息" })).toBe(report);
+      expect(within(screen.getByText("我的消息").closest("li")!).queryByRole("button", { name: "举报这条消息" })).not.toBeInTheDocument();
+
+      fireEvent.click(report);
+      const dialog = screen.getByRole("dialog", { name: "举报这条消息" });
+      fireEvent.change(within(dialog).getByLabelText("举报原因"), { target: { value: "疑似收费引导" } });
+      fireEvent.click(within(dialog).getByRole("button", { name: "确认举报" }));
+      await waitFor(() => expect(reportBody).toEqual({
+        target: { kind: "message", messageId: counterpart.id },
+        clientRequestId: expect.any(String),
+        reason: "疑似收费引导",
+      }));
+      expect(screen.getByRole("button", { name: "屏蔽对方" })).toBeInTheDocument();
+    } finally {
+      if (originalShowModal) Object.defineProperty(HTMLDialogElement.prototype, "showModal", originalShowModal);
+      else delete (HTMLDialogElement.prototype as Partial<HTMLDialogElement>).showModal;
+      if (originalClose) Object.defineProperty(HTMLDialogElement.prototype, "close", originalClose);
+      else delete (HTMLDialogElement.prototype as Partial<HTMLDialogElement>).close;
+    }
+  });
+
   it("polls only while visible, pulls immediately on resume, and starts retries after 2 seconds", async () => {
     vi.useFakeTimers();
     let visibility: DocumentVisibilityState = "visible";
@@ -1008,8 +1051,12 @@ describe("ChatWorkspace", () => {
     vi.spyOn(crypto, "randomUUID").mockReturnValue("40000000-0000-4000-8000-000000000002");
 
     render(<ChatWorkspace realm="parent" />);
-    fireEvent.change(await screen.findByLabelText("消息内容"), { target: { value: "请继续" } });
-    fireEvent.click(screen.getByRole("button", { name: "发送消息" }));
+    const input = await screen.findByLabelText("消息内容");
+    const send = screen.getByRole("button", { name: "发送消息" });
+    await waitFor(() => expect(input).toBeEnabled());
+    fireEvent.change(input, { target: { value: "请继续" } });
+    await waitFor(() => expect(send).toBeEnabled());
+    fireEvent.click(send);
     fireEvent.click(await screen.findByRole("button", { name: "重试发送“请继续”" }));
 
     await waitFor(() => expect(screen.queryByRole("button", { name: "重试发送“请继续”" })).not.toBeInTheDocument());

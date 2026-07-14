@@ -560,6 +560,7 @@ export function ChatWorkspace({ realm }: { realm: ChatRealm }) {
                   }}
                   onLoadOlder={() => { void loadOlder(); }}
                   onRetry={retryMessage}
+                  realm={realm}
                 />
                 {threadState === "error" ? (
                   <p className="chat-thread__error" role="alert">部分消息读取失败，请切换会话后重试。</p>

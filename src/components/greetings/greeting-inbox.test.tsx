@@ -1,4 +1,4 @@
-import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
 
 import { GreetingInbox } from "./greeting-inbox";
@@ -139,6 +139,7 @@ describe("GreetingInbox", () => {
       const dialog = screen.getByRole("dialog", { name: "请说明举报原因" });
       expect(showModal).toHaveBeenCalledOnce();
       expect(dialog).toHaveAttribute("aria-modal", "true");
+      expect(within(dialog).getByText("举报不会自动屏蔽对方；如需停止联系，请另行选择屏蔽。")).toBeInTheDocument();
       fireEvent.change(screen.getByLabelText("举报原因"), { target: { value: "疑似不当信息" } });
       fireEvent.click(screen.getByRole("button", { name: "确认举报" }));
 

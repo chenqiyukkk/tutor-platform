@@ -2,6 +2,7 @@
 
 import Link from "next/link";
 
+import { SafetyActionDialog } from "@/components/moderation/safety-action-dialog";
 import { greetingCardSnapshotSchema, type CurrentGreetingCardSnapshot } from "@/features/greetings/card-schema";
 
 type GreetingItem = {
@@ -14,6 +15,7 @@ type GreetingItem = {
 };
 
 const labels: Record<string, string> = { PENDING: "等待回应", ACCEPTED: "已接受", REJECTED: "已婉拒", EXPIRED: "已过期", REPORTED: "已举报", BLOCKED: "已屏蔽", CANCELLED: "已取消" };
+const historicalSafetyStatuses = new Set(["ACCEPTED", "REJECTED", "EXPIRED", "CANCELLED"]);
 
 const gradeLabels: Record<string, string> = {
   GRADE_1: "一年级", GRADE_2: "二年级", GRADE_3: "三年级", GRADE_4: "四年级",
@@ -67,6 +69,7 @@ export function GreetingCard({ item, onAction, realm, busy = false }: { item: Gr
     {item.note ? <blockquote>{item.note}</blockquote> : <p className="greeting-card__quiet">对方没有填写补充说明</p>}
     <footer><time dateTime={item.createdAt}>{new Date(item.createdAt).toLocaleDateString("zh-CN")}</time>
       {item.direction === "received" && item.status === "PENDING" ? <div className="greeting-card__actions"><button className="button button--primary button--small" disabled={busy} onClick={() => onAction("accept")} type="button">接受</button><button className="button button--outline button--small" disabled={busy} onClick={() => onAction("reject")} type="button">婉拒</button><button className="text-button" disabled={busy} onClick={() => onAction("report")} type="button">举报</button><button className="text-button" disabled={busy} onClick={() => onAction("block")} type="button">屏蔽</button></div> : null}
+      {item.direction === "received" && historicalSafetyStatuses.has(item.status) ? <SafetyActionDialog blockLabel="屏蔽对方" realm={realm} reportLabel="举报这张往来卡" target={{ kind: "greeting", greetingId: item.id }} /> : null}
     </footer>
     {item.status === "ACCEPTED" ? <p className="conversation-notice">会话已建立。<Link href={`/${realm}/messages`}>前往站内消息</Link></p> : null}
   </article>;

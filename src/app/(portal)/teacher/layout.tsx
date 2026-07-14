@@ -12,6 +12,7 @@ export default async function TeacherLayout({ children }: { children: React.Reac
         <nav aria-label="教师工作区导航">
           <Link href="/teacher/dashboard">工作台</Link>
           <Link href="/teacher/profile">教师资料</Link>
+          <Link href="/teacher/verification">自愿认证</Link>
           <Link href="/teacher/greetings">往来卡片</Link>
           <Link href="/teacher/messages">消息</Link>
         </nav>

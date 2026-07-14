@@ -147,6 +147,7 @@ export function GreetingInbox({ realm }: { realm: "parent" | "teacher" }) {
         void action(request.id, request.action, trimmed);
       }}>
         <h2 id="greeting-reason-title">{reasonRequest.action === "report" ? "请说明举报原因" : "请说明屏蔽原因"}</h2>
+        <p>{reasonRequest.action === "report" ? "举报不会自动屏蔽对方；如需停止联系，请另行选择屏蔽。" : "屏蔽不会自动创建举报；如需平台核查，请另行举报。"}</p>
         <label>{reasonRequest.action === "report" ? "举报原因" : "屏蔽原因"}<textarea maxLength={200} onChange={(event) => setReason(event.target.value)} ref={reasonInput} required rows={4} value={reason} /></label>
         <div className="greeting-card__actions">
           <button className="button button--outline" onClick={closeReasonDialog} type="button">取消</button>

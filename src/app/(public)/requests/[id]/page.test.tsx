@@ -26,6 +26,7 @@ describe("request public detail page", () => {
     expect(screen.queryByText("认证教师可见的需求描述")).not.toBeInTheDocument();
     expect(screen.queryByText(/五道口商圈附近/)).not.toBeInTheDocument();
     expect(screen.getByRole("link", { name: "老师登录后回应需求" })).toHaveAttribute("href", "/teacher/login");
+    expect(screen.queryByRole("button", { name: "举报此内容" })).not.toBeInTheDocument();
     expect(mocks.detail).not.toHaveBeenCalled();
   });
 
@@ -37,6 +38,8 @@ describe("request public detail page", () => {
     expect(screen.getByText("认证教师可见的需求描述")).toBeInTheDocument();
     expect(screen.getByText(/五道口商圈附近/)).toBeInTheDocument();
     expect(screen.queryByRole("link", { name: /登录后/ })).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "举报此内容" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "屏蔽对方" })).toBeInTheDocument();
     expect(mocks.preview).not.toHaveBeenCalled();
   });
 });
