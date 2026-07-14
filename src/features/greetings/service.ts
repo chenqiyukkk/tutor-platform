@@ -427,12 +427,23 @@ export function createGreetingService(prisma: PrismaClient, now: () => Date = ()
         }
         if (input.action === "report") {
           const visibleGreeting = toDto(greeting);
-          await transaction.report.upsert({ where: { greetingId: greeting.id }, update: {}, create: {
-            greetingId: greeting.id, reporterAccountId: actor.id, reportedAccountId: greeting.senderAccountId,
-            tutoringRequestId: greeting.tutoringRequestId, targetType: "GREETING", targetId: greeting.id,
-            targetSnapshot: { card: visibleGreeting.card, note: visibleGreeting.note },
-            reason: input.reason!, details: "由受控打招呼卡片举报",
-          } });
+          const openReport = await transaction.report.findFirst({
+            where: {
+              reporterAccountId: actor.id,
+              targetType: "GREETING",
+              targetId: greeting.id,
+              status: { in: ["PENDING", "REVIEWING"] },
+            },
+            select: { id: true },
+          });
+          if (!openReport) {
+            await transaction.report.create({ data: {
+              greetingId: greeting.id, reporterAccountId: actor.id, reportedAccountId: greeting.senderAccountId,
+              tutoringRequestId: greeting.tutoringRequestId, targetType: "GREETING", targetId: greeting.id,
+              targetSnapshot: { card: visibleGreeting.card, note: visibleGreeting.note },
+              reason: input.reason!, details: "由受控打招呼卡片举报",
+            } });
+          }
           const row = await transaction.greeting.update({ where: { id: greeting.id }, data: { status: "REPORTED", respondedAt: at } });
           return { ...toDto(row), reported: true };
         }

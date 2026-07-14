@@ -276,6 +276,8 @@ describe("chat polling indexes", () => {
 
 describe("moderation workflow schema", () => {
   it("stores canonical report targets, idempotency keys, decisions, and moderation holds", () => {
+    const greetingModel = schema.match(/model Greeting \{[\s\S]*?\n\}/)?.[0] ?? "";
+    const reportModel = schema.match(/model Report \{[\s\S]*?\n\}/)?.[0] ?? "";
     expect(schema).toContain("enum ReportTargetType");
     for (const value of ["ACCOUNT", "TEACHER_PROFILE", "TUTORING_REQUEST", "GREETING", "CONVERSATION", "MESSAGE"]) {
       expect(schema).toMatch(new RegExp(`enum ReportTargetType[\\s\\S]*\\b${value}\\b`));
@@ -287,8 +289,13 @@ describe("moderation workflow schema", () => {
     expect(schema).toMatch(/targetSnapshot\s+Json\?/);
     expect(schema).toMatch(/resolutionAction\s+ReportResolutionAction\?/);
     expect(schema).toMatch(/teacherProfileId\s+String\?\s+@db\.Uuid/);
+    expect(greetingModel).toMatch(/reports\s+Report\[\]/);
+    expect(greetingModel).not.toMatch(/\breport\s+Report\?/);
+    expect(reportModel).toMatch(/greetingId\s+String\?\s+@db\.Uuid/);
+    expect(reportModel).not.toMatch(/greetingId\s+String\?[^\n]*@unique/);
     expect(schema).toContain("@@unique([reporterAccountId, clientRequestId])");
     expect(schema).toContain("@@index([targetType, targetId])");
+    expect(reportModel).toContain("@@index([greetingId])");
     expect(schema).toContain("@@unique([accountId, clientRequestId])");
     expect(schema).toMatch(/requestId\s+String\?\s+@unique\s+@db\.Uuid/);
     expect(schema.match(/moderationRejectedAt\s+DateTime\?\s+@db\.Timestamptz\(3\)/g)).toHaveLength(2);
@@ -312,6 +319,8 @@ describe("moderation workflow schema", () => {
     expect(sql).toContain("cannot derive canonical target for one or more legacy reports");
     expect(sql).toContain('ALTER COLUMN "targetType" SET NOT NULL');
     expect(sql).toContain('ALTER COLUMN "targetId" SET NOT NULL');
+    expect(sql).toContain('DROP INDEX "Report_greetingId_key"');
+    expect(sql).toContain('CREATE INDEX "Report_greetingId_idx"');
     expect(sql).toContain('"Report_reporterAccountId_clientRequestId_key"');
     expect(sql).toContain('"Report_reporterAccountId_targetType_targetId_open_key"');
     expect(sql).toMatch(/WHERE "status" IN \('PENDING', 'REVIEWING'\)/);

@@ -360,6 +360,75 @@ describe("moderation workflow migration", () => {
     }
   }, 30_000);
 
+  it("allows historical and multi-reporter greeting reports while keeping each reporter's open report unique", async () => {
+    expect(migrationExists()).toBe(true);
+    if (!invariantDatabase) return;
+    const client = new Client({ connectionString: invariantDatabase.url });
+    try {
+      await client.connect();
+      const teacherId = await insertAccount(client, "TEACHER", "greeting-history-subject");
+      const parentId = await insertAccount(client, "PARENT", "greeting-history-reporter");
+      const parentProfileId = randomUUID(), requestId = randomUUID(), greetingId = randomUUID();
+      await client.query(`
+        INSERT INTO "ParentProfile" ("id","accountId","displayName","status","createdAt","updatedAt")
+        VALUES ($1,$2,'Greeting history parent','PUBLISHED',CURRENT_TIMESTAMP,CURRENT_TIMESTAMP)
+      `, [parentProfileId, parentId]);
+      await client.query(`
+        INSERT INTO "TutoringRequest" ("id","parentProfileId","title","description","status","createdAt","updatedAt")
+        VALUES ($1,$2,'Greeting history request','Preserve reports','DRAFT',CURRENT_TIMESTAMP,CURRENT_TIMESTAMP)
+      `, [requestId, parentProfileId]);
+      await client.query(`
+        INSERT INTO "Greeting" (
+          "id","senderAccountId","recipientAccountId","tutoringRequestId","contextKey","cardSnapshot",
+          "status","expiresAt","respondedAt","createdAt","updatedAt"
+        ) VALUES ($1,$2,$3,$4,$5,'{"legacy":true}'::jsonb,'REPORTED',CURRENT_TIMESTAMP + interval '7 days',CURRENT_TIMESTAMP,CURRENT_TIMESTAMP,CURRENT_TIMESTAMP)
+      `, [greetingId, teacherId, parentId, requestId, `${teacherId}:${parentId}:${requestId}`]);
+      await client.query(`
+        INSERT INTO "Report" (
+          "id","reporterAccountId","reportedAccountId","tutoringRequestId","greetingId",
+          "targetType","targetId","reason","status","createdAt","updatedAt"
+        ) VALUES ($1,$2,$3,$4,$5,'GREETING',$5,'Resolved greeting report','RESOLVED',CURRENT_TIMESTAMP,CURRENT_TIMESTAMP)
+      `, [randomUUID(), parentId, teacherId, requestId, greetingId]);
+      const legacy = { teacherId, parentId, requestId, greetingId };
+      const reopenedId = randomUUID();
+      await client.query(`
+        INSERT INTO "Report" (
+          "id","reporterAccountId","reportedAccountId","tutoringRequestId","greetingId",
+          "targetType","targetId","reason","status","createdAt","updatedAt"
+        ) VALUES ($1,$2,$3,$4,$5,'GREETING',$5,'Reopened greeting report','PENDING',CURRENT_TIMESTAMP,CURRENT_TIMESTAMP)
+      `, [reopenedId, legacy.parentId, legacy.teacherId, legacy.requestId, legacy.greetingId]);
+
+      await expect(client.query(`
+        INSERT INTO "Report" (
+          "id","reporterAccountId","reportedAccountId","tutoringRequestId","greetingId",
+          "targetType","targetId","reason","status","createdAt","updatedAt"
+        ) VALUES ($1,$2,$3,$4,$5,'GREETING',$5,'Duplicate open greeting report','REVIEWING',CURRENT_TIMESTAMP,CURRENT_TIMESTAMP)
+      `, [randomUUID(), legacy.parentId, legacy.teacherId, legacy.requestId, legacy.greetingId]))
+        .rejects.toMatchObject({
+          code: "23505",
+          constraint: "Report_reporterAccountId_targetType_targetId_open_key",
+        });
+
+      const otherReporterId = await insertAccount(client, "PARENT", "other-greeting-reporter");
+      await client.query(`
+        INSERT INTO "Report" (
+          "id","reporterAccountId","reportedAccountId","tutoringRequestId","greetingId",
+          "targetType","targetId","reason","status","createdAt","updatedAt"
+        ) VALUES ($1,$2,$3,$4,$5,'GREETING',$5,'Other reporter greeting report','PENDING',CURRENT_TIMESTAMP,CURRENT_TIMESTAMP)
+      `, [randomUUID(), otherReporterId, legacy.teacherId, legacy.requestId, legacy.greetingId]);
+
+      const history = await client.query(`SELECT "reporterAccountId","status" FROM "Report" WHERE "greetingId" = $1`, [legacy.greetingId]);
+      expect(history.rows).toEqual(expect.arrayContaining([
+        { reporterAccountId: legacy.parentId, status: "RESOLVED" },
+        { reporterAccountId: legacy.parentId, status: "PENDING" },
+        { reporterAccountId: otherReporterId, status: "PENDING" },
+      ]));
+      expect(history.rowCount).toBe(3);
+    } finally {
+      await client.end().catch(() => undefined);
+    }
+  }, 30_000);
+
   it("serializes concurrent pending verifications for one account and type", async () => {
     expect(migrationExists()).toBe(true);
     if (!invariantDatabase) return;

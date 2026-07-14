@@ -588,8 +588,9 @@ describe("greeting workflow against PostgreSQL", () => {
     const greeting = await service.send({ id: teacherId, role: "teacher" }, { targetId: req.id, requestId: req.id, note: "" });
     await service.respond({ id: reportParent.id, role: "parent" }, greeting.id, { action: "report", reason: "疑似不当信息" });
     await expect(service.respond({ id: reportParent.id, role: "parent" }, greeting.id, { action: "report", reason: "重复提交" })).resolves.toMatchObject({ status: "REPORTED", reported: true });
-    await expect(prisma.report.count({ where: { greetingId: greeting.id } })).resolves.toBe(1);
-    const report = await prisma.report.findUniqueOrThrow({ where: { greetingId: greeting.id } });
+    const reports = await prisma.report.findMany({ where: { greetingId: greeting.id }, orderBy: { createdAt: "asc" } });
+    expect(reports).toHaveLength(1);
+    const [report] = reports;
     expect(report).toMatchObject({
       targetType: "GREETING",
       targetId: greeting.id,

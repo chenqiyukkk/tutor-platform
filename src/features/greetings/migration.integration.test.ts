@@ -13,7 +13,7 @@ describe("greeting workflow database constraints", () => {
   const prisma = new PrismaClient({ adapter: new PrismaPg({ connectionString: process.env.DATABASE_URL! }) });
   afterAll(() => prisma.$disconnect());
 
-  it("enforces context, conversation and report uniqueness in PostgreSQL", async () => {
+  it("enforces context and conversation uniqueness with report lookup indexing in PostgreSQL", async () => {
     const indexes = await prisma.$queryRaw<Array<{ indexname: string }>>`
       SELECT indexname FROM pg_indexes
       WHERE schemaname = current_schema()
@@ -22,7 +22,7 @@ describe("greeting workflow database constraints", () => {
           'Greeting_senderAccountId_createdAt_id_idx',
           'Greeting_recipientAccountId_createdAt_id_idx',
           'Conversation_teacherId_parentId_tutoringRequestId_key',
-          'Report_greetingId_key',
+          'Report_greetingId_idx',
           'Favorite_ownerAccountId_teacherProfileId_key',
           'Favorite_ownerAccountId_tutoringRequestId_key'
         )
@@ -34,7 +34,7 @@ describe("greeting workflow database constraints", () => {
       "Greeting_contextKey_key",
       "Greeting_recipientAccountId_createdAt_id_idx",
       "Greeting_senderAccountId_createdAt_id_idx",
-      "Report_greetingId_key",
+      "Report_greetingId_idx",
     ]);
   });
 

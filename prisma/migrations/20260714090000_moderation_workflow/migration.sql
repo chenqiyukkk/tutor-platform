@@ -134,6 +134,10 @@ ALTER TABLE "Report" ADD CONSTRAINT "Report_target_shape_check"
   );
 
 DROP INDEX "Report_reporterAccountId_idx";
+DROP INDEX "Report_greetingId_key";
+
+CREATE INDEX "Report_greetingId_idx"
+  ON "Report"("greetingId");
 
 CREATE UNIQUE INDEX "Report_reporterAccountId_clientRequestId_key"
   ON "Report"("reporterAccountId", "clientRequestId");

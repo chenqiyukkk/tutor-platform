@@ -379,7 +379,7 @@ model Greeting {
   recipient       Account         @relation("ReceivedGreetings", fields: [recipientAccountId], references: [id], onDelete: Restrict)
   tutoringRequest TutoringRequest @relation(fields: [tutoringRequestId], references: [id], onDelete: Restrict)
   conversation    Conversation?
-  report          Report?
+  reports         Report[]
 
   @@index([recipientAccountId, status])
   @@index([senderAccountId, createdAt(sort: Desc), id])
@@ -463,7 +463,7 @@ model Report {
   tutoringRequestId String?                 @db.Uuid
   conversationId    String?                 @db.Uuid
   messageId         String?                 @db.Uuid
-  greetingId        String?                 @unique @db.Uuid
+  greetingId        String?                 @db.Uuid
   targetType        ReportTargetType
   targetId          String                  @db.Uuid
   clientRequestId   String?                 @db.Uuid
@@ -489,6 +489,7 @@ model Report {
   @@unique([reporterAccountId, clientRequestId])
   @@index([status, createdAt])
   @@index([reportedAccountId])
+  @@index([greetingId])
   @@index([targetType, targetId])
 }
 
