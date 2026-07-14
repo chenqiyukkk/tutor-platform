@@ -3,6 +3,8 @@ node_modules/
 .next/
 out/
 coverage/
+verification-uploads/
+.private-uploads/
 *.tsbuildinfo
 prisma/*.db
 prisma/*.db-journal
