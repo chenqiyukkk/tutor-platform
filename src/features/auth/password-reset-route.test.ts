@@ -154,6 +154,20 @@ describe("role-scoped password reset routes", () => {
     await expect(response.json()).resolves.toEqual({ error: INVALID_RESET_TOKEN_MESSAGE });
   });
 
+  it("rejects oversized password-reset bodies", async () => {
+    const handlers = createPasswordResetHandlers({} as PasswordResetService);
+    const response = await handlers.resetPassword(new Request(
+      "https://tutor.example.test/api/auth/parent/reset-password",
+      {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ token: "x".repeat(17_000), newPassword: "new password long enough" }),
+      },
+    ), "parent");
+
+    expect(response.status).toBe(413);
+  });
+
   it.each(["forgotPassword", "resetPassword"] as const)(
     "returns 404 for an unsupported %s role path",
     async (method) => {

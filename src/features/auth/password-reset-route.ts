@@ -1,6 +1,8 @@
 import { after, NextResponse } from "next/server";
 import { ZodError } from "zod";
 
+import { JsonBodyError, readLimitedJson } from "@/lib/json-body";
+
 import { parseAuthRole } from "./schemas";
 import {
   FORGOT_PASSWORD_MESSAGE,
@@ -22,15 +24,19 @@ function jsonError(error: string, status: number) {
 
 async function readObject(request: Request): Promise<Record<string, unknown>> {
   try {
-    const body: unknown = await request.json();
+    const body = await readLimitedJson(request);
     if (!body || typeof body !== "object" || Array.isArray(body)) throw new Error();
     return body as Record<string, unknown>;
-  } catch {
+  } catch (error) {
+    if (error instanceof JsonBodyError) throw error;
     throw new ZodError([]);
   }
 }
 
 function routeError(error: unknown) {
+  if (error instanceof JsonBodyError) {
+    return jsonError(error.message, error.code === "too_large" ? 413 : 400);
+  }
   if (error instanceof PasswordResetError) {
     return jsonError(INVALID_RESET_TOKEN_MESSAGE, 400);
   }

@@ -1,6 +1,8 @@
 import { NextResponse } from "next/server";
 import { ZodError } from "zod";
 
+import { JsonBodyError, readLimitedJson } from "@/lib/json-body";
+
 import { requireSessionRole } from "./guards";
 import {
   loginSchema,
@@ -14,14 +16,6 @@ import { getExpiredSessionCookie, getSessionCookie } from "./session";
 
 function jsonError(error: string, status: number) {
   return NextResponse.json({ error }, { status });
-}
-
-async function readJson(request: Request) {
-  try {
-    return await request.json();
-  } catch {
-    throw new ZodError([]);
-  }
 }
 
 function getCookie(request: Request, name: string) {
@@ -38,6 +32,9 @@ function redirectFrom(request: Request, pathname: string) {
 }
 
 function routeError(error: unknown) {
+  if (error instanceof JsonBodyError) {
+    return jsonError(error.message, error.code === "too_large" ? 413 : 400);
+  }
   if (error instanceof ZodError) {
     return jsonError(error.issues[0]?.message ?? "请求内容格式不正确", 400);
   }
@@ -60,7 +57,7 @@ export function createRoleAuthHandlers(service: AuthService) {
       }
 
       try {
-        const input = registerSchema.parse(await readJson(request));
+        const input = registerSchema.parse(await readLimitedJson(request));
         await service.register(role, input);
         const session = await service.login(role, {
           identifier: input.username,
@@ -81,7 +78,7 @@ export function createRoleAuthHandlers(service: AuthService) {
     async login(request: Request, pathRole: string) {
       try {
         const role = parseAuthRole(pathRole);
-        const input = loginSchema.parse(await readJson(request));
+        const input = loginSchema.parse(await readLimitedJson(request));
         const session = await service.login(role, input);
         const response = redirectFrom(request, roleDashboardPath[role]);
         const cookie = getSessionCookie(role);

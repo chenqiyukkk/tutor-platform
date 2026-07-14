@@ -107,6 +107,17 @@ describe("role-scoped authentication routes", () => {
     await expect(response.json()).resolves.toEqual({ error: "账号或密码错误" });
   });
 
+  it("rejects oversized authentication bodies before calling the service", async () => {
+    const handlers = createRoleAuthHandlers({} as AuthService);
+    const response = await handlers.login(new Request("http://localhost/api/auth/parent/login", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ identifier: "x".repeat(17_000), password: "password" }),
+    }), "parent");
+
+    expect(response.status).toBe(413);
+  });
+
   it("revokes and clears only the URL role cookie on logout", async () => {
     const calls: Array<[string, string | undefined]> = [];
     const service = {
