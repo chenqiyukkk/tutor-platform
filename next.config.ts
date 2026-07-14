@@ -8,6 +8,7 @@ const resetPageHeaders = [
 ];
 
 const nextConfig: NextConfig = {
+  output: "standalone",
   async headers() {
     return [{ source: "/:path*", headers: buildSecurityHeaders() }, ...["teacher", "parent", "admin"].map((role) => ({
       source: `/${role}/reset-password`,

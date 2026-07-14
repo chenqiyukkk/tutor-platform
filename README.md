@@ -36,9 +36,9 @@ Playwright 首次运行前执行 `npx playwright install chromium`。端到端�
 
 ## 公网发布
 
-推荐使用 Vercel 托管 Next.js、Neon 托管 PostgreSQL。GitHub 仓库连接 Vercel 后可先获得 HTTPS 的 `*.vercel.app` 链接，再绑定购买的正式域名。完整步骤见 [Vercel 部署手册](docs/operations/deployment.md)。
+生产环境使用 Docker Compose 在一台 Linux VPS 上运行 Next.js、PostgreSQL 和 Caddy。Caddy 自动配置 HTTPS，部署完成后访客只需打开正式域名，不需要安装 Docker。完整步骤见 [Docker 部署手册](docs/operations/deployment.md)。
 
-生产发布前必须配置高强度 `SESSION_SECRET`、独立生产数据库、准确的 HTTPS `APP_URL`；密码找回需要 SMTP，认证材料上传需要私有对象存储，缺失时相关能力应保持关闭。
+生产发布前必须配置高强度 `SESSION_SECRET`、独立生产数据库、准确的 HTTPS `APP_URL`，并建立异机备份；密码找回需要 SMTP，认证材料上传需要私有对象存储，缺失时相关能力应保持关闭。
 
 管理员不能公开注册。数据库迁移完成后，通过受控环境变量执行：
 
