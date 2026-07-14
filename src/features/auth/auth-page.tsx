@@ -16,9 +16,7 @@ export function AuthPage(props: AuthPageProps) {
   return (
     <main className={`auth-page auth-page--${role}`} id="main-content">
       <section className="auth-page__panel" aria-labelledby="auth-title">
-        <Link className="auth-page__brand" href="/" aria-label="返回家教平台首页">
-          <Logo />
-        </Link>
+        <Logo className="auth-page__brand" />
         <p className="eyebrow">{roleLabels[role]}专属入口</p>
         <h1 id="auth-title">{registering ? "建立你的平台账户" : "欢迎回来"}</h1>
         <p className="auth-page__intro">

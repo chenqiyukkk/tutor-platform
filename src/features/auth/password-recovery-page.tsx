@@ -14,9 +14,7 @@ export function PasswordRecoveryPage(props: PasswordRecoveryPageProps) {
   return (
     <main className={`auth-page auth-page--${role}`} id="main-content">
       <section className="auth-page__panel" aria-labelledby="auth-title">
-        <Link className="auth-page__brand" href="/" aria-label="返回家教平台首页">
-          <Logo />
-        </Link>
+        <Logo className="auth-page__brand" />
         <p className="eyebrow">{roleLabels[role]}专属入口</p>
         <h1 id="auth-title">
           {mode === "forgot" ? `找回${roleLabels[role]}账户` : "设置新密码"}

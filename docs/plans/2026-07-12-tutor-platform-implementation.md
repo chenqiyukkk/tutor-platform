@@ -662,6 +662,8 @@ git commit -m "feat: harden platform security"
 
 ### Task 14: Add end-to-end tests, production build, and operating docs
 
+> 2026-07-14 deployment decision: the user selected Vercel + Neon with a custom domain. Docker production packaging is superseded by `docs/plans/2026-07-14-vercel-deployment-design.md`; Docker Compose remains only an optional local PostgreSQL convenience.
+
 **Files:**
 - Create: playwright.config.ts
 - Create: e2e/teacher-parent-flow.spec.ts
