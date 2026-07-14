@@ -1,8 +1,8 @@
 import "server-only";
 
 import { Prisma, type PrismaClient } from "@prisma/client";
-import { CURRENT_PUBLIC_CONTENT_SAFETY_VERSION } from "@/features/safety/public-content-version";
 
+import { requestPublicVisibilityWhere, teacherPublicVisibilityWhere } from "./public-visibility";
 import type { RequestDirectoryQuery, TeacherDirectoryQuery } from "./query";
 import {
   toPublicRequestDetail,
@@ -52,48 +52,8 @@ const requestDetailScalarSelect = {
   publicLocationNote: true,
 } satisfies Prisma.TutoringRequestSelect;
 
-const teacherPublicBase: Prisma.TeacherProfileWhereInput = {
-  status: "PUBLISHED",
-  publishedAt: { not: null },
-  publicContentSafetyVersion: CURRENT_PUBLIC_CONTENT_SAFETY_VERSION,
-  displayName: { not: "" },
-  headline: { not: null },
-  identityType: { not: null },
-  bio: { not: null },
-  yearsExperience: { not: null },
-  hourlyRate: { not: null },
-  hourlyRateMax: { not: null },
-  account: { role: "TEACHER", status: "ACTIVE" },
-  subjects: {
-    some: {},
-    every: { subject: { isActive: true } },
-  },
-  serviceAreas: {
-    some: { isPrimary: true },
-    every: { region: { isActive: true, level: 3 } },
-  },
-};
-
-function requestPublicBase(now = new Date()): Prisma.TutoringRequestWhereInput {
-  return {
-    status: "PUBLISHED",
-    publishedAt: { not: null },
-    publicContentSafetyVersion: CURRENT_PUBLIC_CONTENT_SAFETY_VERSION,
-    title: { not: "" },
-    description: { not: "" },
-    OR: [{ expiresAt: null }, { expiresAt: { gt: now } }],
-    parentProfile: { account: { role: "PARENT", status: "ACTIVE" } },
-    studentProfile: { is: { isActive: true } },
-    region: { is: { isActive: true, level: 3 } },
-    subjects: {
-      some: {},
-      every: { subject: { isActive: true } },
-    },
-  };
-}
-
 function teacherWhere(query: TeacherDirectoryQuery): Prisma.TeacherProfileWhereInput {
-  const filters: Prisma.TeacherProfileWhereInput[] = [teacherPublicBase];
+  const filters: Prisma.TeacherProfileWhereInput[] = [teacherPublicVisibilityWhere];
   if (query.district) filters.push({ serviceAreas: { some: { regionId: query.district } } });
   if (query.subject) filters.push({ subjects: { some: { subjectId: query.subject } } });
   if (query.identityType) filters.push({ identityType: query.identityType });
@@ -108,7 +68,7 @@ function teacherWhere(query: TeacherDirectoryQuery): Prisma.TeacherProfileWhereI
 }
 
 function requestWhere(query: RequestDirectoryQuery, now = new Date()): Prisma.TutoringRequestWhereInput {
-  const filters: Prisma.TutoringRequestWhereInput[] = [requestPublicBase(now)];
+  const filters: Prisma.TutoringRequestWhereInput[] = [requestPublicVisibilityWhere(now)];
   if (query.district) filters.push({ regionId: query.district });
   if (query.subject) filters.push({ subjects: { some: { subjectId: query.subject } } });
   if (query.mode === "ONLINE") filters.push({ teachingMode: { in: ["ONLINE", "BOTH"] } });
@@ -268,7 +228,7 @@ export class PrismaDirectoryRepository implements DirectoryRepository {
   async getTeacherPreview(id: string) {
     return this.prisma.$transaction(async (transaction) => {
       const row = await transaction.teacherProfile.findFirst({
-        where: { AND: [teacherPublicBase, { id }] },
+        where: { AND: [teacherPublicVisibilityWhere, { id }] },
         select: teacherPreviewScalarSelect,
       });
       if (!row) return null;
@@ -280,7 +240,7 @@ export class PrismaDirectoryRepository implements DirectoryRepository {
   async getTeacherDetail(id: string) {
     return this.prisma.$transaction(async (transaction) => {
       const row = await transaction.teacherProfile.findFirst({
-        where: { AND: [teacherPublicBase, { id }] },
+        where: { AND: [teacherPublicVisibilityWhere, { id }] },
         select: teacherDetailScalarSelect,
       });
       if (!row) return null;
@@ -313,7 +273,7 @@ export class PrismaDirectoryRepository implements DirectoryRepository {
   async getRequestPreview(id: string) {
     return this.prisma.$transaction(async (transaction) => {
       const row = await transaction.tutoringRequest.findFirst({
-        where: { AND: [requestPublicBase(), { id }] },
+        where: { AND: [requestPublicVisibilityWhere(), { id }] },
         select: requestPreviewScalarSelect,
       });
       if (!row) return null;
@@ -325,7 +285,7 @@ export class PrismaDirectoryRepository implements DirectoryRepository {
   async getRequestDetail(id: string) {
     return this.prisma.$transaction(async (transaction) => {
       const row = await transaction.tutoringRequest.findFirst({
-        where: { AND: [requestPublicBase(), { id }] },
+        where: { AND: [requestPublicVisibilityWhere(), { id }] },
         select: requestDetailScalarSelect,
       });
       if (!row) return null;

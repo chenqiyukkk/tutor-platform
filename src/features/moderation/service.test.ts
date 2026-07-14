@@ -18,6 +18,7 @@ const ids = {
   messageId: "55555555-5555-4555-8555-555555555555",
   clientRequestId: "66666666-6666-4666-8666-666666666666",
   accountId: "77777777-7777-4777-8777-777777777777",
+  targetAccountId: "88888888-8888-4888-8888-888888888888",
 };
 
 const targets = [
@@ -103,5 +104,48 @@ describe("moderation report race handling", () => {
     const service = createModerationService({ $transaction: transaction } as unknown as PrismaClient);
     await expect(service.createReport({ id: ids.accountId, role: "parent" }, input)).rejects.toBe(failure);
     expect(transaction).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe("moderation block resolution", () => {
+  it("keeps both preflight and post-lock teacher resolution free of report evidence hydration", async () => {
+    const forbiddenEvidenceQuery = vi.fn(() => {
+      throw new Error("createBlock must not hydrate report evidence");
+    });
+    const teacherProfile = {
+      findFirst: vi.fn().mockResolvedValue({ id: ids.profileId, accountId: ids.targetAccountId }),
+    };
+    const account = { findFirst: vi.fn().mockResolvedValue({ id: ids.accountId }) };
+    const evidence = {
+      teacherSubject: { findMany: forbiddenEvidenceQuery },
+      subject: { findMany: forbiddenEvidenceQuery },
+      teacherServiceArea: { findMany: forbiddenEvidenceQuery },
+      region: { findMany: forbiddenEvidenceQuery },
+      verification: { findMany: forbiddenEvidenceQuery },
+    };
+    const block = { upsert: vi.fn().mockResolvedValue({}) };
+    const transaction = {
+      $queryRaw: vi.fn().mockResolvedValue([{ locked: 1 }]),
+      account,
+      teacherProfile,
+      ...evidence,
+      block,
+    };
+    const prisma = {
+      account,
+      teacherProfile,
+      ...evidence,
+      $transaction: vi.fn(async (callback: (client: typeof transaction) => unknown) => callback(transaction)),
+    } as unknown as PrismaClient;
+    const service = createModerationService(prisma);
+
+    await expect(service.createBlock(
+      { id: ids.accountId, role: "parent" },
+      { target: targets[0], reason: "不希望继续互动" },
+    )).resolves.toEqual({ blocked: true });
+
+    expect(teacherProfile.findFirst).toHaveBeenCalledTimes(2);
+    expect(forbiddenEvidenceQuery).not.toHaveBeenCalled();
+    expect(block.upsert).toHaveBeenCalledOnce();
   });
 });

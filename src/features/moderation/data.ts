@@ -3,10 +3,13 @@ import "server-only";
 import { Prisma, type PrismaClient } from "@prisma/client";
 
 import { queryConversationContext, safeMessageSelect, toMessageDto } from "@/features/chat/data";
+import {
+  requestPublicVisibilityWhere,
+  teacherPublicVisibilityWhere,
+} from "@/features/directory/public-visibility";
 import { toPublicRequestDetail, toPublicTeacherDetail } from "@/features/directory/redaction";
 import { greetingCardSnapshotSchema } from "@/features/greetings/card-schema";
 import { violatesContactPolicy } from "@/features/safety/contact-policy";
-import { CURRENT_PUBLIC_CONTENT_SAFETY_VERSION } from "@/features/safety/public-content-version";
 
 import type { ModerationTarget } from "./schema";
 
@@ -28,46 +31,34 @@ export type ResolvedModerationTarget = {
   greetingContextKey?: string;
 };
 
-const teacherPublicWhere = {
-  status: "PUBLISHED",
-  publishedAt: { not: null },
-  publicContentSafetyVersion: CURRENT_PUBLIC_CONTENT_SAFETY_VERSION,
-  displayName: { not: "" },
-  headline: { not: null },
-  identityType: { not: null },
-  bio: { not: null },
-  yearsExperience: { not: null },
-  hourlyRate: { not: null },
-  hourlyRateMax: { not: null },
-  account: { role: "TEACHER", status: "ACTIVE" },
-  subjects: { some: {}, every: { subject: { isActive: true } } },
-  serviceAreas: { some: { isPrimary: true }, every: { region: { isActive: true, level: 3 } } },
-} satisfies Prisma.TeacherProfileWhereInput;
-
-function requestPublicWhere(now: Date) {
-  return {
-    status: "PUBLISHED",
-    publishedAt: { not: null },
-    publicContentSafetyVersion: CURRENT_PUBLIC_CONTENT_SAFETY_VERSION,
-    title: { not: "" },
-    description: { not: "" },
-    OR: [{ expiresAt: null }, { expiresAt: { gt: now } }],
-    parentProfile: { account: { role: "PARENT", status: "ACTIVE" } },
-    studentProfile: { is: { isActive: true } },
-    region: { is: { isActive: true, level: 3 } },
-    subjects: { some: {}, every: { subject: { isActive: true } } },
-  } satisfies Prisma.TutoringRequestWhereInput;
-}
+export type ResolvedBlockTarget = Omit<ResolvedModerationTarget, "snapshot"> & {
+  snapshot?: Prisma.InputJsonObject;
+};
 
 async function resolveTeacherProfile(
   client: Db,
   actor: ModerationActor,
   profileId: string,
   now: Date,
-): Promise<ResolvedModerationTarget | null> {
+  purpose: "report" | "block",
+): Promise<ResolvedModerationTarget | ResolvedBlockTarget | null> {
   if (actor.role !== "parent") return null;
+  if (purpose === "block") {
+    const row = await client.teacherProfile.findFirst({
+      where: { AND: [teacherPublicVisibilityWhere, { id: profileId }] },
+      select: { id: true, accountId: true },
+    });
+    if (!row) return null;
+    return {
+      targetType: "TEACHER_PROFILE",
+      targetId: row.id,
+      reportedAccountId: row.accountId,
+      teacherProfileId: row.id,
+      pair: { teacherId: row.accountId, parentId: actor.id },
+    };
+  }
   const row = await client.teacherProfile.findFirst({
-    where: { AND: [teacherPublicWhere, { id: profileId }] },
+    where: { AND: [teacherPublicVisibilityWhere, { id: profileId }] },
     select: {
       id: true, displayName: true, identityType: true, headline: true, bio: true,
       yearsExperience: true, hourlyRate: true, hourlyRateMax: true, isOnline: true, publishedAt: true,
@@ -127,21 +118,33 @@ async function resolveTutoringRequest(
   actor: ModerationActor,
   requestId: string,
   now: Date,
-): Promise<ResolvedModerationTarget | null> {
+  purpose: "report" | "block",
+): Promise<ResolvedModerationTarget | ResolvedBlockTarget | null> {
   if (actor.role !== "teacher") return null;
   const row = await client.tutoringRequest.findFirst({
-    where: { AND: [requestPublicWhere(now), { id: requestId }] },
-    select: {
-      id: true, title: true, description: true, scheduleText: true, budgetMin: true, budgetMax: true,
-      teachingMode: true, publicLocationNote: true, publishedAt: true,
-      parentProfileId: true, studentProfileId: true, regionId: true,
-    },
+    where: { AND: [requestPublicVisibilityWhere(now), { id: requestId }] },
+    select: purpose === "block"
+      ? { id: true, parentProfileId: true }
+      : {
+          id: true, title: true, description: true, scheduleText: true, budgetMin: true, budgetMax: true,
+          teachingMode: true, publicLocationNote: true, publishedAt: true,
+          parentProfileId: true, studentProfileId: true, regionId: true,
+        },
   });
   if (!row) return null;
   const parentProfile = await client.parentProfile.findUnique({
     where: { id: row.parentProfileId }, select: { accountId: true },
   });
   if (!parentProfile) return null;
+  if (purpose === "block") {
+    return {
+      targetType: "TUTORING_REQUEST",
+      targetId: row.id,
+      reportedAccountId: parentProfile.accountId,
+      tutoringRequestId: row.id,
+      pair: { teacherId: actor.id, parentId: parentProfile.accountId },
+    };
+  }
   const studentProfile = row.studentProfileId ? await client.studentProfile.findFirst({
     where: { id: row.studentProfileId, isActive: true }, select: { displayName: true, gradeLevel: true },
   }) : null;
@@ -306,16 +309,34 @@ export function targetIdentity(target: ModerationTarget) {
   return { targetType: "MESSAGE" as const, targetId: target.messageId };
 }
 
+export function resolveModerationTarget(
+  client: Db,
+  actor: ModerationActor,
+  target: ModerationTarget,
+  now: Date,
+  purpose: "report",
+): Promise<ResolvedModerationTarget | null>;
+export function resolveModerationTarget(
+  client: Db,
+  actor: ModerationActor,
+  target: ModerationTarget,
+  now: Date,
+  purpose: "block",
+): Promise<ResolvedBlockTarget | null>;
 export async function resolveModerationTarget(
   client: Db,
   actor: ModerationActor,
   target: ModerationTarget,
   now: Date,
   purpose: "report" | "block",
-) {
+): Promise<ResolvedModerationTarget | ResolvedBlockTarget | null> {
   const requireActive = purpose === "block";
-  if (target.kind === "teacher_profile") return resolveTeacherProfile(client, actor, target.profileId, now);
-  if (target.kind === "tutoring_request") return resolveTutoringRequest(client, actor, target.requestId, now);
+  if (target.kind === "teacher_profile") {
+    return resolveTeacherProfile(client, actor, target.profileId, now, purpose);
+  }
+  if (target.kind === "tutoring_request") {
+    return resolveTutoringRequest(client, actor, target.requestId, now, purpose);
+  }
   if (target.kind === "greeting") return resolveGreeting(client, actor, target.greetingId, requireActive);
   if (target.kind === "conversation") return resolveConversation(client, actor, target.conversationId, requireActive);
   return resolveMessage(client, actor, target.messageId, requireActive);
