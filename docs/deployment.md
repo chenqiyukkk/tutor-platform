@@ -60,3 +60,46 @@ npx prisma db push --accept-data-loss
 ```
 
 `migrate reset` 会删除并重建 PostgreSQL schema，属于开发库专用命令。生产故障恢复必须使用备份、forward migration、经过验证的 compensation SQL，以及必要时严格受控的 `migrate resolve`；绝不以 reset 处理 checksum、drift 或 failed migration。
+
+## 管理员首次引导
+
+公开注册只允许老师和家长；管理员只能由有数据库发布权限的运维人员在受控终端显式创建。先完成 migration，再由 secret manager（密钥管理器）或 deployment orchestrator（部署编排器）在 `npm` 进程启动前注入 `ADMIN_BOOTSTRAP_USERNAME`、`ADMIN_BOOTSTRAP_EMAIL`、`ADMIN_BOOTSTRAP_PASSWORD`，并把 `npm run admin:create` 设为该一次性任务的固定命令。三项值不得出现在命令参数、任务定义明文或本地 `.env` 中；脚本会在加载 `.env` 前捕获三项变量，`.env` 只能补充 `DATABASE_URL` 等运行配置，其中的 bootstrap 值会被忽略。
+
+无法使用 secret manager 时，可在受控 Windows 终端临时隐藏输入。以下示例不把密码写进命令行；`finally` 会清除子进程环境并零化非托管 BSTR 缓冲区：
+
+```powershell
+$username = Read-Host "管理员用户名"
+$email = Read-Host "管理员邮箱"
+$securePassword = Read-Host "管理员密码" -AsSecureString
+$passwordBstr = [IntPtr]::Zero
+try {
+  $passwordBstr = [Runtime.InteropServices.Marshal]::SecureStringToBSTR($securePassword)
+  $env:ADMIN_BOOTSTRAP_USERNAME = $username
+  $env:ADMIN_BOOTSTRAP_EMAIL = $email
+  $env:ADMIN_BOOTSTRAP_PASSWORD = [Runtime.InteropServices.Marshal]::PtrToStringBSTR($passwordBstr)
+  npm run admin:create
+} finally {
+  Remove-Item Env:ADMIN_BOOTSTRAP_USERNAME, Env:ADMIN_BOOTSTRAP_EMAIL, Env:ADMIN_BOOTSTRAP_PASSWORD -ErrorAction SilentlyContinue
+  if ($passwordBstr -ne [IntPtr]::Zero) {
+    [Runtime.InteropServices.Marshal]::ZeroFreeBSTR($passwordBstr)
+  }
+  $securePassword.Dispose()
+  $username = $null
+  $email = $null
+}
+```
+
+PowerShell/Node 运行时仍可能短暂保留托管字符串副本，因此该方式只是受控终端兜底，不能替代 secret manager。CLI（command-line interface，命令行接口）的 `--password` 仅允许隔离开发环境使用 synthetic credential（合成凭据）；npm banner、shell history 和进程列表可能回显完整参数，真实管理员凭据禁止通过 CLI 传递。同一字段同时出现时 CLI 值优先。脚本没有默认凭据，只创建 `ADMIN/ACTIVE` 账号；若同为管理员角色的标准化用户名或邮箱已存在，则拒绝执行并且绝不更新密码。完整轮值与处置流程见 [`operations/moderation.md`](operations/moderation.md)。
+
+## 认证证据存储是生产硬门
+
+当前实现的 `VERIFICATION_UPLOAD_DIR` 只用于开发/测试私有目录，并在 `NODE_ENV=production` 时由代码硬关闭。生产环境即使配置该变量也不得开放上传；发布验收必须确认老师认证页不渲染文件输入，上传 API 返回“功能未开放”。
+
+只有在以下能力全部落地、通过安全评审和恢复演练后，才能以新的 production storage adapter（生产存储适配器）显式开放：
+
+- 私有对象存储默认拒绝公开访问，应用与管理员使用最小权限 IAM（identity and access management，身份与访问管理），静态与传输加密开启；
+- 上传先完成 MIME/magic byte、大小、像素和安全解码校验，再经过恶意文件扫描；对象 key、路径和签名 URL 不进入列表、日志或公开 DTO；
+- 管理员仅在 ACTIVE ADMIN 二次鉴权后按需下载，响应 `no-store`、`attachment`、`nosniff`，查看行为写 append-only（仅追加）审计；
+- 明确保留期、删除任务、备份范围、密钥轮换、访问告警和孤儿对象对账，并完成故障与泄露响应演练。
+
+任一项缺失，认证申请仍可展示“暂未开放”，不能以本地磁盘、公开 bucket（存储桶）或长效 URL 临时绕过。

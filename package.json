@@ -14,7 +14,8 @@
     "test:e2e": "playwright test",
     "db:generate": "prisma generate",
     "db:migrate": "prisma migrate dev",
-    "db:seed": "prisma db seed"
+    "db:seed": "prisma db seed",
+    "admin:create": "tsx scripts/create-admin.ts"
   },
   "keywords": [],
   "author": "",
