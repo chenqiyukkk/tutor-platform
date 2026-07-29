@@ -1,0 +1,25 @@
+import { render, screen, within } from "@testing-library/react";
+
+import HomePage from "./page";
+
+describe("HomePage", () => {
+  it("shows the platform promise and role entry links", () => {
+    render(<HomePage />);
+
+    expect(
+      screen.getByRole("heading", {
+        name: "找到合适的老师，也找到真正需要你的学生",
+      }),
+    ).toBeInTheDocument();
+    const roleEntry = within(screen.getByLabelText("选择使用身份"));
+
+    expect(roleEntry.getByRole("link", { name: "我是老师" })).toHaveAttribute(
+      "href",
+      "/teacher/login",
+    );
+    expect(roleEntry.getByRole("link", { name: "我是家长" })).toHaveAttribute(
+      "href",
+      "/parent/login",
+    );
+  });
+});

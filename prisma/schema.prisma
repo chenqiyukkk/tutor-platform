@@ -1,0 +1,535 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+}
+
+enum AccountRole {
+  TEACHER
+  PARENT
+  ADMIN
+}
+
+enum AccountStatus {
+  ACTIVE
+  SUSPENDED
+  DISABLED
+}
+
+enum ProfileStatus {
+  DRAFT
+  PENDING_REVIEW
+  PUBLISHED
+  REJECTED
+}
+
+enum TeacherIdentityType {
+  UNIVERSITY_STUDENT
+  FULL_TIME_TEACHER
+  OTHER
+}
+
+enum GreetingStatus {
+  PENDING
+  ACCEPTED
+  REJECTED
+  CANCELLED
+  EXPIRED
+  REPORTED
+  BLOCKED
+}
+
+enum RequestStatus {
+  DRAFT
+  PUBLISHED
+  CLOSED
+}
+
+enum TeachingMode {
+  OFFLINE
+  ONLINE
+  BOTH
+}
+
+enum ReportStatus {
+  PENDING
+  REVIEWING
+  RESOLVED
+  DISMISSED
+}
+
+enum ReportTargetType {
+  ACCOUNT
+  TEACHER_PROFILE
+  TUTORING_REQUEST
+  GREETING
+  CONVERSATION
+  MESSAGE
+}
+
+enum ReportResolutionAction {
+  NONE
+  CONTENT_TAKEDOWN
+  ACCOUNT_SUSPENSION
+}
+
+enum VerificationStatus {
+  PENDING
+  APPROVED
+  REJECTED
+  EXPIRED
+}
+
+model Account {
+  /// Accounts are deactivated through status; historical relations restrict hard deletion.
+  id                 String        @id @default(uuid()) @db.Uuid
+  role               AccountRole
+  status             AccountStatus @default(ACTIVE)
+  username           String
+  normalizedUsername String
+  email              String
+  normalizedEmail    String
+  passwordHash       String
+  lastLoginAt        DateTime?     @db.Timestamptz(3)
+  createdAt          DateTime      @default(now()) @db.Timestamptz(3)
+  updatedAt          DateTime      @updatedAt @db.Timestamptz(3)
+
+  teacherProfile        TeacherProfile?
+  parentProfile         ParentProfile?
+  ownedFavorites        Favorite[]
+  sessions              Session[]
+  passwordResetTokens   PasswordResetToken[]
+  sentGreetings         Greeting[]           @relation("SentGreetings")
+  receivedGreetings     Greeting[]           @relation("ReceivedGreetings")
+  greetingAttempts      GreetingAttempt[]
+  teacherConversations  Conversation[]       @relation("TeacherConversations")
+  parentConversations   Conversation[]       @relation("ParentConversations")
+  messages              Message[]
+  blocksCreated         Block[]              @relation("BlockerAccount")
+  blocksReceived        Block[]              @relation("BlockedAccount")
+  reportsSubmitted      Report[]             @relation("ReportReporter")
+  reportsReceived       Report[]             @relation("ReportSubject")
+  reportsReviewed       Report[]             @relation("ReportReviewer")
+  verifications         Verification[]       @relation("VerificationApplicant")
+  verificationsReviewed Verification[]       @relation("VerificationReviewer")
+  adminAuditLogs        AdminAuditLog[]      @relation("AuditAdmin")
+
+  @@unique([role, normalizedUsername])
+  @@unique([role, normalizedEmail])
+  @@index([status])
+}
+
+model Session {
+  id         String    @id @default(uuid()) @db.Uuid
+  accountId  String    @db.Uuid
+  tokenHash  String    @unique
+  expiresAt  DateTime  @db.Timestamptz(3)
+  lastSeenAt DateTime? @db.Timestamptz(3)
+  revokedAt  DateTime? @db.Timestamptz(3)
+  createdAt  DateTime  @default(now()) @db.Timestamptz(3)
+
+  account Account @relation(fields: [accountId], references: [id], onDelete: Cascade)
+
+  @@index([accountId, expiresAt])
+}
+
+model PasswordResetToken {
+  id          String    @id @default(uuid()) @db.Uuid
+  accountId   String    @db.Uuid
+  tokenHash   String    @unique
+  expiresAt   DateTime  @db.Timestamptz(3)
+  activatedAt DateTime? @db.Timestamptz(3)
+  usedAt      DateTime? @db.Timestamptz(3)
+  createdAt   DateTime  @default(now()) @db.Timestamptz(3)
+
+  account Account @relation(fields: [accountId], references: [id], onDelete: Cascade)
+
+  @@index([accountId, expiresAt])
+}
+
+model TeacherProfile {
+  id                         String               @id @default(uuid()) @db.Uuid
+  accountId                  String               @unique @db.Uuid
+  displayName                String
+  identityType               TeacherIdentityType?
+  headline                   String?
+  bio                        String?
+  avatarUrl                  String?
+  yearsExperience            Int?
+  hourlyRate                 Decimal?             @db.Decimal(10, 2)
+  hourlyRateMax              Decimal?             @db.Decimal(10, 2)
+  isOnline                   Boolean              @default(false)
+  status                     ProfileStatus        @default(DRAFT)
+  publishedAt                DateTime?            @db.Timestamptz(3)
+  publicContentSafetyVersion Int                  @default(0)
+  moderationRejectedAt       DateTime?            @db.Timestamptz(3)
+  moderationReason           String?
+  createdAt                  DateTime             @default(now()) @db.Timestamptz(3)
+  updatedAt                  DateTime             @updatedAt @db.Timestamptz(3)
+
+  account       Account              @relation(fields: [accountId], references: [id], onDelete: Cascade)
+  subjects      TeacherSubject[]
+  serviceAreas  TeacherServiceArea[]
+  favorites     Favorite[]
+  verifications Verification[]
+  reports       Report[]
+
+  @@index([status])
+  @@index([status, publishedAt(sort: Desc), id])
+  @@index([status, publicContentSafetyVersion, publishedAt(sort: Desc), id])
+}
+
+model ParentProfile {
+  id          String        @id @default(uuid()) @db.Uuid
+  accountId   String        @unique @db.Uuid
+  displayName String
+  avatarUrl   String?
+  status      ProfileStatus @default(DRAFT)
+  createdAt   DateTime      @default(now()) @db.Timestamptz(3)
+  updatedAt   DateTime      @updatedAt @db.Timestamptz(3)
+
+  account  Account           @relation(fields: [accountId], references: [id], onDelete: Cascade)
+  students StudentProfile[]
+  requests TutoringRequest[]
+}
+
+model StudentProfile {
+  id              String   @id @default(uuid()) @db.Uuid
+  parentProfileId String   @db.Uuid
+  displayName     String
+  gradeLevel      String?
+  notes           String?
+  isActive        Boolean  @default(true)
+  createdAt       DateTime @default(now()) @db.Timestamptz(3)
+  updatedAt       DateTime @updatedAt @db.Timestamptz(3)
+
+  parentProfile ParentProfile     @relation(fields: [parentProfileId], references: [id], onDelete: Cascade)
+  requests      TutoringRequest[]
+
+  @@index([parentProfileId])
+}
+
+model Subject {
+  id        String   @id @default(uuid()) @db.Uuid
+  name      String
+  slug      String   @unique
+  parentId  String?  @db.Uuid
+  sortOrder Int      @default(0)
+  isActive  Boolean  @default(true)
+  createdAt DateTime @default(now()) @db.Timestamptz(3)
+  updatedAt DateTime @updatedAt @db.Timestamptz(3)
+
+  parent          Subject?         @relation("SubjectHierarchy", fields: [parentId], references: [id], onDelete: Restrict)
+  children        Subject[]        @relation("SubjectHierarchy")
+  teacherSubjects TeacherSubject[]
+  requestSubjects RequestSubject[]
+
+  @@index([parentId, sortOrder])
+}
+
+model Region {
+  id        String   @id @default(uuid()) @db.Uuid
+  code      String   @unique
+  name      String
+  level     Int
+  parentId  String?  @db.Uuid
+  sortOrder Int      @default(0)
+  isActive  Boolean  @default(true)
+  createdAt DateTime @default(now()) @db.Timestamptz(3)
+  updatedAt DateTime @updatedAt @db.Timestamptz(3)
+
+  parent       Region?              @relation("RegionHierarchy", fields: [parentId], references: [id], onDelete: Restrict)
+  children     Region[]             @relation("RegionHierarchy")
+  adjacencyAs  RegionAdjacency[]    @relation("RegionAdjacencyA")
+  adjacencyBs  RegionAdjacency[]    @relation("RegionAdjacencyB")
+  serviceAreas TeacherServiceArea[]
+  requests     TutoringRequest[]
+
+  @@index([parentId, sortOrder])
+  @@index([level, isActive])
+}
+
+model RegionAdjacency {
+  id        String   @id @default(uuid()) @db.Uuid
+  regionAId String   @db.Uuid
+  regionBId String   @db.Uuid
+  createdAt DateTime @default(now()) @db.Timestamptz(3)
+
+  regionA Region @relation("RegionAdjacencyA", fields: [regionAId], references: [id], onDelete: Cascade)
+  regionB Region @relation("RegionAdjacencyB", fields: [regionBId], references: [id], onDelete: Cascade)
+
+  @@unique([regionAId, regionBId])
+  @@index([regionBId])
+}
+
+model TeacherSubject {
+  id               String   @id @default(uuid()) @db.Uuid
+  teacherProfileId String   @db.Uuid
+  subjectId        String   @db.Uuid
+  yearsExperience  Int?
+  createdAt        DateTime @default(now()) @db.Timestamptz(3)
+
+  teacherProfile TeacherProfile @relation(fields: [teacherProfileId], references: [id], onDelete: Cascade)
+  subject        Subject        @relation(fields: [subjectId], references: [id], onDelete: Restrict)
+
+  @@unique([teacherProfileId, subjectId])
+  @@index([subjectId])
+}
+
+model TeacherServiceArea {
+  id               String   @id @default(uuid()) @db.Uuid
+  teacherProfileId String   @db.Uuid
+  regionId         String   @db.Uuid
+  isPrimary        Boolean  @default(false)
+  createdAt        DateTime @default(now()) @db.Timestamptz(3)
+
+  teacherProfile TeacherProfile @relation(fields: [teacherProfileId], references: [id], onDelete: Cascade)
+  region         Region         @relation(fields: [regionId], references: [id], onDelete: Restrict)
+
+  @@unique([teacherProfileId, regionId])
+  @@index([regionId])
+}
+
+model TutoringRequest {
+  id                         String        @id @default(uuid()) @db.Uuid
+  parentProfileId            String        @db.Uuid
+  studentProfileId           String?       @db.Uuid
+  regionId                   String?       @db.Uuid
+  title                      String
+  description                String
+  scheduleText               String?       @map("schedule")
+  budgetMin                  Int?
+  budgetMax                  Int?
+  teachingMode               TeachingMode?
+  publicLocationNote         String?
+  status                     RequestStatus @default(DRAFT)
+  publishedAt                DateTime?     @db.Timestamptz(3)
+  closedAt                   DateTime?     @db.Timestamptz(3)
+  expiresAt                  DateTime?     @db.Timestamptz(3)
+  publicContentSafetyVersion Int           @default(0)
+  moderationRejectedAt       DateTime?     @db.Timestamptz(3)
+  moderationReason           String?
+  createdAt                  DateTime      @default(now()) @db.Timestamptz(3)
+  updatedAt                  DateTime      @updatedAt @db.Timestamptz(3)
+
+  parentProfile  ParentProfile    @relation(fields: [parentProfileId], references: [id], onDelete: Cascade)
+  studentProfile StudentProfile?  @relation(fields: [studentProfileId], references: [id], onDelete: SetNull)
+  region         Region?          @relation(fields: [regionId], references: [id], onDelete: SetNull)
+  subjects       RequestSubject[]
+  favorites      Favorite[]
+  greetings      Greeting[]
+  conversations  Conversation[]
+  reports        Report[]
+
+  @@index([parentProfileId, status])
+  @@index([regionId, status])
+  @@index([publishedAt])
+  @@index([status, publishedAt(sort: Desc), id])
+  @@index([status, publicContentSafetyVersion, publishedAt(sort: Desc), id])
+}
+
+model RequestSubject {
+  id                String   @id @default(uuid()) @db.Uuid
+  tutoringRequestId String   @db.Uuid
+  subjectId         String   @db.Uuid
+  createdAt         DateTime @default(now()) @db.Timestamptz(3)
+
+  tutoringRequest TutoringRequest @relation(fields: [tutoringRequestId], references: [id], onDelete: Cascade)
+  subject         Subject         @relation(fields: [subjectId], references: [id], onDelete: Restrict)
+
+  @@unique([tutoringRequestId, subjectId])
+  @@index([subjectId])
+}
+
+model Favorite {
+  id                String   @id @default(uuid()) @db.Uuid
+  ownerAccountId    String   @db.Uuid
+  teacherProfileId  String?  @db.Uuid
+  tutoringRequestId String?  @db.Uuid
+  createdAt         DateTime @default(now()) @db.Timestamptz(3)
+
+  owner           Account          @relation(fields: [ownerAccountId], references: [id], onDelete: Cascade)
+  teacherProfile  TeacherProfile?  @relation(fields: [teacherProfileId], references: [id], onDelete: Cascade)
+  tutoringRequest TutoringRequest? @relation(fields: [tutoringRequestId], references: [id], onDelete: Cascade)
+
+  @@unique([ownerAccountId, teacherProfileId])
+  @@unique([ownerAccountId, tutoringRequestId])
+  @@index([teacherProfileId])
+  @@index([tutoringRequestId])
+  @@index([ownerAccountId, createdAt(sort: Desc), id])
+}
+
+model Greeting {
+  id                 String         @id @default(uuid()) @db.Uuid
+  senderAccountId    String         @db.Uuid
+  recipientAccountId String         @db.Uuid
+  tutoringRequestId  String         @db.Uuid
+  contextKey         String         @unique
+  message            String?
+  cardSnapshot       Json
+  status             GreetingStatus @default(PENDING)
+  expiresAt          DateTime       @db.Timestamptz(3)
+  respondedAt        DateTime?      @db.Timestamptz(3)
+  createdAt          DateTime       @default(now()) @db.Timestamptz(3)
+  updatedAt          DateTime       @updatedAt @db.Timestamptz(3)
+
+  sender          Account         @relation("SentGreetings", fields: [senderAccountId], references: [id], onDelete: Restrict)
+  recipient       Account         @relation("ReceivedGreetings", fields: [recipientAccountId], references: [id], onDelete: Restrict)
+  tutoringRequest TutoringRequest @relation(fields: [tutoringRequestId], references: [id], onDelete: Restrict)
+  conversation    Conversation?
+  reports         Report[]
+
+  @@index([recipientAccountId, status])
+  @@index([senderAccountId, createdAt(sort: Desc), id])
+  @@index([recipientAccountId, createdAt(sort: Desc), id])
+  @@index([tutoringRequestId])
+}
+
+model GreetingAttempt {
+  id              String   @id @default(uuid()) @db.Uuid
+  senderAccountId String   @db.Uuid
+  attemptedAt     DateTime @default(now()) @db.Timestamptz(3)
+
+  sender Account @relation(fields: [senderAccountId], references: [id], onDelete: Cascade)
+
+  @@index([senderAccountId, attemptedAt])
+}
+
+model Conversation {
+  id                String    @id @default(uuid()) @db.Uuid
+  greetingId        String    @unique @db.Uuid
+  teacherId         String    @db.Uuid
+  parentId          String    @db.Uuid
+  tutoringRequestId String    @db.Uuid
+  lastMessageAt     DateTime? @db.Timestamptz(3)
+  createdAt         DateTime  @default(now()) @db.Timestamptz(3)
+  updatedAt         DateTime  @updatedAt @db.Timestamptz(3)
+
+  greeting        Greeting        @relation(fields: [greetingId], references: [id], onDelete: Restrict)
+  teacher         Account         @relation("TeacherConversations", fields: [teacherId], references: [id], onDelete: Restrict)
+  parent          Account         @relation("ParentConversations", fields: [parentId], references: [id], onDelete: Restrict)
+  tutoringRequest TutoringRequest @relation(fields: [tutoringRequestId], references: [id], onDelete: Restrict)
+  messages        Message[]
+  reports         Report[]
+
+  @@unique([teacherId, parentId, tutoringRequestId])
+}
+
+model Message {
+  id              String    @id @default(uuid()) @db.Uuid
+  conversationId  String    @db.Uuid
+  senderAccountId String    @db.Uuid
+  clientMessageId String
+  body            String
+  sentAt          DateTime  @default(now()) @db.Timestamptz(3)
+  readAt          DateTime? @db.Timestamptz(3)
+  editedAt        DateTime? @db.Timestamptz(3)
+  deletedAt       DateTime? @db.Timestamptz(3)
+  updatedAt       DateTime  @default(now()) @db.Timestamptz(3)
+  changeVersion   BigInt    @default(0)
+
+  conversation Conversation @relation(fields: [conversationId], references: [id], onDelete: Restrict)
+  sender       Account      @relation(fields: [senderAccountId], references: [id], onDelete: Restrict)
+  reports      Report[]
+
+  @@unique([conversationId, clientMessageId])
+  @@index([conversationId, sentAt, id])
+  @@index([conversationId, changeVersion])
+  @@index([senderAccountId])
+}
+
+model Block {
+  id               String   @id @default(uuid()) @db.Uuid
+  blockerAccountId String   @db.Uuid
+  blockedAccountId String   @db.Uuid
+  reason           String?
+  createdAt        DateTime @default(now()) @db.Timestamptz(3)
+
+  blocker Account @relation("BlockerAccount", fields: [blockerAccountId], references: [id], onDelete: Cascade)
+  blocked Account @relation("BlockedAccount", fields: [blockedAccountId], references: [id], onDelete: Cascade)
+
+  @@unique([blockerAccountId, blockedAccountId])
+  @@index([blockedAccountId])
+}
+
+model Report {
+  id                String                  @id @default(uuid()) @db.Uuid
+  reporterAccountId String                  @db.Uuid
+  reportedAccountId String?                 @db.Uuid
+  reviewerAccountId String?                 @db.Uuid
+  teacherProfileId  String?                 @db.Uuid
+  tutoringRequestId String?                 @db.Uuid
+  conversationId    String?                 @db.Uuid
+  messageId         String?                 @db.Uuid
+  greetingId        String?                 @db.Uuid
+  targetType        ReportTargetType
+  targetId          String                  @db.Uuid
+  clientRequestId   String?                 @db.Uuid
+  targetSnapshot    Json?
+  reason            String
+  details           String?
+  status            ReportStatus            @default(PENDING)
+  resolution        String?
+  resolutionAction  ReportResolutionAction?
+  reviewedAt        DateTime?               @db.Timestamptz(3)
+  createdAt         DateTime                @default(now()) @db.Timestamptz(3)
+  updatedAt         DateTime                @updatedAt @db.Timestamptz(3)
+
+  reporter        Account          @relation("ReportReporter", fields: [reporterAccountId], references: [id], onDelete: Restrict)
+  reportedAccount Account?         @relation("ReportSubject", fields: [reportedAccountId], references: [id], onDelete: SetNull)
+  reviewer        Account?         @relation("ReportReviewer", fields: [reviewerAccountId], references: [id], onDelete: SetNull)
+  teacherProfile  TeacherProfile?  @relation(fields: [teacherProfileId], references: [id], onDelete: SetNull)
+  tutoringRequest TutoringRequest? @relation(fields: [tutoringRequestId], references: [id], onDelete: SetNull)
+  conversation    Conversation?    @relation(fields: [conversationId], references: [id], onDelete: SetNull)
+  message         Message?         @relation(fields: [messageId], references: [id], onDelete: SetNull)
+  greeting        Greeting?        @relation(fields: [greetingId], references: [id], onDelete: SetNull)
+
+  @@unique([reporterAccountId, clientRequestId])
+  @@index([status, createdAt])
+  @@index([reportedAccountId])
+  @@index([greetingId])
+  @@index([targetType, targetId])
+}
+
+model Verification {
+  id                String             @id @default(uuid()) @db.Uuid
+  accountId         String             @db.Uuid
+  teacherProfileId  String?            @db.Uuid
+  reviewerAccountId String?            @db.Uuid
+  clientRequestId   String?            @db.Uuid
+  type              String
+  status            VerificationStatus @default(PENDING)
+  evidence          Json?
+  reviewNote        String?
+  submittedAt       DateTime           @default(now()) @db.Timestamptz(3)
+  reviewedAt        DateTime?          @db.Timestamptz(3)
+  expiresAt         DateTime?          @db.Timestamptz(3)
+  updatedAt         DateTime           @updatedAt @db.Timestamptz(3)
+
+  account        Account         @relation("VerificationApplicant", fields: [accountId], references: [id], onDelete: Cascade)
+  teacherProfile TeacherProfile? @relation(fields: [teacherProfileId], references: [id], onDelete: Cascade)
+  reviewer       Account?        @relation("VerificationReviewer", fields: [reviewerAccountId], references: [id], onDelete: SetNull)
+
+  @@unique([accountId, clientRequestId])
+  @@index([accountId, type, status])
+  @@index([status, submittedAt])
+}
+
+model AdminAuditLog {
+  id             String   @id @default(uuid()) @db.Uuid
+  adminAccountId String   @db.Uuid
+  requestId      String?  @unique @db.Uuid
+  action         String
+  targetType     String
+  targetId       String?
+  metadata       Json?
+  ipAddress      String?
+  createdAt      DateTime @default(now()) @db.Timestamptz(3)
+
+  admin Account @relation("AuditAdmin", fields: [adminAccountId], references: [id], onDelete: Restrict)
+
+  @@index([adminAccountId, createdAt])
+  @@index([targetType, targetId])
+}

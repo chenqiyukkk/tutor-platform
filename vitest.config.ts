@@ -1,0 +1,20 @@
+import { fileURLToPath } from "node:url";
+
+import { configDefaults, defineConfig } from "vitest/config";
+
+export default defineConfig({
+  resolve: {
+    alias: {
+      "@": fileURLToPath(new URL("./src", import.meta.url)),
+    },
+  },
+  test: {
+    environment: "jsdom",
+    // Integration files share one real PostgreSQL instance; running files in
+    // parallel creates lock contention and masks behavior with timeouts.
+    fileParallelism: false,
+    exclude: [...configDefaults.exclude, "e2e/**"],
+    globals: true,
+    setupFiles: ["./vitest.setup.ts"],
+  },
+});

@@ -1,1 +1,16 @@
 .worktrees/
+node_modules/
+.next/
+out/
+coverage/
+playwright-report/
+test-results/
+verification-uploads/
+.private-uploads/
+*.tsbuildinfo
+prisma/*.db
+prisma/*.db-journal
+.env*
+!.env.example
+!.env.production.example
+npm-debug.log*
