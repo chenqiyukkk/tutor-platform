@@ -2,6 +2,7 @@ import { PrismaPg } from "@prisma/adapter-pg";
 import { PrismaClient } from "@prisma/client";
 
 import { getDatabaseEnv } from "../src/lib/env";
+import { regionSeedRows, type RegionSeedRow } from "./region-data";
 
 const adapter = new PrismaPg({ connectionString: getDatabaseEnv().DATABASE_URL });
 const prisma = new PrismaClient({ adapter });
@@ -26,121 +27,22 @@ async function seedSubjects() {
 }
 
 async function seedRegions() {
-  const districts = new Map<string, string>();
-  const municipalityFixtures = [
-    {
-      province: { code: "110000", name: "北京市", sortOrder: 10 },
-      city: { code: "110100", name: "北京市", sortOrder: 10 },
-      districts: [
-        { code: "110105", name: "朝阳区", sortOrder: 10 },
-        { code: "110108", name: "海淀区", sortOrder: 20 },
-      ],
-    },
-    {
-      province: { code: "310000", name: "上海市", sortOrder: 20 },
-      city: { code: "310100", name: "上海市", sortOrder: 10 },
-      districts: [
-        { code: "310101", name: "黄浦区", sortOrder: 10 },
-        { code: "310115", name: "浦东新区", sortOrder: 20 },
-      ],
-    },
-  ];
+  const regionIds = new Map<string, string>();
 
-  for (const fixture of municipalityFixtures) {
-    const province = await prisma.region.upsert({
-      where: { code: fixture.province.code },
-      update: {
-        name: fixture.province.name,
-        level: 1,
-        parentId: null,
-        sortOrder: fixture.province.sortOrder,
-        isActive: true,
-      },
-      create: { ...fixture.province, level: 1 },
-    });
-    const city = await prisma.region.upsert({
-      where: { code: fixture.city.code },
-      update: {
-        name: fixture.city.name,
-        level: 2,
-        parentId: province.id,
-        sortOrder: fixture.city.sortOrder,
-        isActive: true,
-      },
-      create: { ...fixture.city, level: 2, parentId: province.id },
-    });
-
-    for (const district of fixture.districts) {
-      const saved = await prisma.region.upsert({
-        where: { code: district.code },
-        update: {
-          name: district.name,
-          level: 3,
-          parentId: city.id,
-          sortOrder: district.sortOrder,
-          isActive: true,
-        },
-        create: { ...district, level: 3, parentId: city.id },
-      });
-      districts.set(district.code, saved.id);
-    }
+  for (const level of [1, 2, 3] as const) {
+    await seedRegionLevel(
+      regionSeedRows.filter((region) => region.level === level),
+      regionIds,
+    );
   }
 
-  const guangdong = await prisma.region.upsert({
-    where: { code: "440000" },
-    update: { name: "广东省", level: 1, parentId: null, sortOrder: 10, isActive: true },
-    create: { code: "440000", name: "广东省", level: 1, sortOrder: 10 },
+  await prisma.region.updateMany({
+    where: {
+      code: { notIn: regionSeedRows.map((region) => region.code) },
+      isActive: true,
+    },
+    data: { isActive: false },
   });
-
-  const cityFixtures = [
-    { code: "440100", name: "广州市", sortOrder: 10 },
-    { code: "440300", name: "深圳市", sortOrder: 20 },
-  ];
-  const cities = new Map<string, string>();
-
-  for (const city of cityFixtures) {
-    const saved = await prisma.region.upsert({
-      where: { code: city.code },
-      update: {
-        name: city.name,
-        level: 2,
-        parentId: guangdong.id,
-        sortOrder: city.sortOrder,
-        isActive: true,
-      },
-      create: { ...city, level: 2, parentId: guangdong.id },
-    });
-    cities.set(city.code, saved.id);
-  }
-
-  const districtFixtures = [
-    { code: "440104", name: "越秀区", cityCode: "440100", sortOrder: 10 },
-    { code: "440106", name: "天河区", cityCode: "440100", sortOrder: 20 },
-    { code: "440304", name: "福田区", cityCode: "440300", sortOrder: 10 },
-    { code: "440305", name: "南山区", cityCode: "440300", sortOrder: 20 },
-  ];
-  for (const district of districtFixtures) {
-    const parentId = cities.get(district.cityCode);
-    if (!parentId) throw new Error(`Missing city fixture ${district.cityCode}`);
-    const saved = await prisma.region.upsert({
-      where: { code: district.code },
-      update: {
-        name: district.name,
-        level: 3,
-        parentId,
-        sortOrder: district.sortOrder,
-        isActive: true,
-      },
-      create: {
-        code: district.code,
-        name: district.name,
-        level: 3,
-        parentId,
-        sortOrder: district.sortOrder,
-      },
-    });
-    districts.set(district.code, saved.id);
-  }
 
   for (const [leftCode, rightCode] of [
     ["110105", "110108"],
@@ -148,8 +50,8 @@ async function seedRegions() {
     ["440104", "440106"],
     ["440304", "440305"],
   ]) {
-    const leftId = districts.get(leftCode);
-    const rightId = districts.get(rightCode);
+    const leftId = regionIds.get(leftCode);
+    const rightId = regionIds.get(rightCode);
     if (!leftId || !rightId) throw new Error("Missing district adjacency fixture");
     const [regionAId, regionBId] = [leftId, rightId].sort();
     await prisma.regionAdjacency.upsert({
@@ -158,6 +60,80 @@ async function seedRegions() {
       create: { regionAId, regionBId },
     });
   }
+}
+
+async function seedRegionLevel(
+  rows: RegionSeedRow[],
+  regionIds: Map<string, string>,
+) {
+  const existing = await prisma.region.findMany({
+    where: { code: { in: rows.map((region) => region.code) } },
+    select: {
+      id: true,
+      code: true,
+      name: true,
+      level: true,
+      parentId: true,
+      sortOrder: true,
+      isActive: true,
+    },
+  });
+  const existingByCode = new Map(existing.map((region) => [region.code, region]));
+
+  const toCreate = rows
+    .filter((region) => !existingByCode.has(region.code))
+    .map((region) => ({
+      code: region.code,
+      name: region.name,
+      level: region.level,
+      parentId: getParentId(region, regionIds),
+      sortOrder: region.sortOrder,
+      isActive: true,
+    }));
+  if (toCreate.length > 0) {
+    await prisma.region.createMany({ data: toCreate, skipDuplicates: true });
+  }
+
+  const toUpdate = rows.filter((region) => {
+    const saved = existingByCode.get(region.code);
+    if (!saved) return false;
+    return saved.name !== region.name ||
+      saved.level !== region.level ||
+      saved.parentId !== getParentId(region, regionIds) ||
+      saved.sortOrder !== region.sortOrder ||
+      !saved.isActive;
+  });
+  for (let index = 0; index < toUpdate.length; index += 50) {
+    await Promise.all(toUpdate.slice(index, index + 50).map((region) =>
+      prisma.region.update({
+        where: { code: region.code },
+        data: {
+          name: region.name,
+          level: region.level,
+          parentId: getParentId(region, regionIds),
+          sortOrder: region.sortOrder,
+          isActive: true,
+        },
+      })));
+  }
+
+  const saved = await prisma.region.findMany({
+    where: { code: { in: rows.map((region) => region.code) } },
+    select: { id: true, code: true },
+  });
+  for (const region of saved) regionIds.set(region.code, region.id);
+}
+
+function getParentId(
+  region: RegionSeedRow,
+  regionIds: Map<string, string>,
+) {
+  if (!region.parentCode) return null;
+  const parentId = regionIds.get(region.parentCode);
+  if (!parentId) {
+    throw new Error(`Missing parent region ${region.parentCode} for ${region.code}`);
+  }
+  return parentId;
 }
 
 async function main() {

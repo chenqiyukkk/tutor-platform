@@ -9,6 +9,8 @@ import { loadEnvFile } from "node:process";
 import { Client } from "pg";
 import { expect, it } from "vitest";
 
+import { regionSeedRows } from "./region-data";
+
 if (!process.env.DATABASE_URL && existsSync(".env")) loadEnvFile(".env");
 if (!process.env.DATABASE_URL) throw new Error("DATABASE_URL is required for seed upgrade tests");
 
@@ -76,7 +78,7 @@ it("upgrades the legacy two-level Beijing and Shanghai seed without deleting dat
       { code: "310115", level: 3, parent: { code: "310100" } },
     ]);
     expect(await prisma.subject.count()).toBe(6);
-    expect(await prisma.region.count()).toBe(15);
+    expect(await prisma.region.count()).toBe(regionSeedRows.length);
     expect(await prisma.regionAdjacency.count()).toBe(4);
   } finally {
     await prisma?.$disconnect();

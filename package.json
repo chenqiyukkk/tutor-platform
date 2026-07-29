@@ -25,6 +25,7 @@
     "@node-rs/argon2": "^2.0.2",
     "@prisma/adapter-pg": "^7.8.0",
     "@prisma/client": "^7.8.0",
+    "@province-city-china/level": "8.5.8",
     "next": "^16.2.10",
     "nodemailer": "^9.0.3",
     "pg": "^8.22.0",

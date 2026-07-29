@@ -620,6 +620,8 @@ describe("chat service against PostgreSQL", () => {
 
   it("uses stable activity/id keyset pagination for conversation lists", async () => {
     const activityAt = new Date("2026-07-13T11:30:00.000Z");
+    const respondedAt = new Date();
+    const expiresAt = new Date(respondedAt.getTime() + 7 * 24 * 60 * 60 * 1000);
     const extraConversationIds = [
       "20000000-0000-4000-8000-000000000001",
       "20000000-0000-4000-8000-000000000002",
@@ -638,8 +640,8 @@ describe("chat service against PostgreSQL", () => {
         contextKey: `${teacher.id}:${parent.id}:${request.id}`,
         cardSnapshot: { legacy: true },
         status: "ACCEPTED",
-        respondedAt: new Date("2026-07-13T09:00:00.000Z"),
-        expiresAt: new Date("2026-07-20T09:00:00.000Z"),
+        respondedAt,
+        expiresAt,
       } });
       await prisma.conversation.create({ data: {
         id,
